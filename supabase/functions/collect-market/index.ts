@@ -50,6 +50,55 @@ const REALMS: RealmId[] = [0, 1];
 const RATE_LIMIT_DELAY_MS = 550;
 const BASE_INDEX_VALUE = 1000;
 
+const FOOD_RESOURCE_NAMES = new Set([
+  "apple cider",
+  "apple icecream",
+  "apple pie",
+  "apples",
+  "bread",
+  "butter",
+  "cheese",
+  "chocolate",
+  "chocolate icecream",
+  "cocktails",
+  "cocoa",
+  "coffee beans",
+  "coffee powder",
+  "cream egg",
+  "dough",
+  "easter bunny",
+  "eggs",
+  "flour",
+  "fodder",
+  "ginger beer",
+  "grain",
+  "milk",
+  "orange juice",
+  "oranges",
+  "sausages",
+  "steak",
+  "sugar",
+  "sugarcane",
+  "vegetable oil",
+  "vegetables",
+]);
+
+const CONSTRUCTION_RESOURCE_NAMES = new Set([
+  "beams",
+  "bricks",
+  "bulldozer",
+  "cement",
+  "clay",
+  "construction units",
+  "glass",
+  "limestone",
+  "planks",
+  "sand",
+  "tools",
+  "windows",
+  "wood",
+]);
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -141,6 +190,18 @@ function weightedReturn(rows: MarketDailyRow[], weightField: "market_value" | "e
   }, 0) / totalWeight;
 
   return value;
+}
+
+function isResearchRow(row: MarketDailyRow) {
+  return row.resource_name.toLowerCase().includes("research");
+}
+
+function isFoodRow(row: MarketDailyRow) {
+  return FOOD_RESOURCE_NAMES.has(row.resource_name.toLowerCase());
+}
+
+function isConstructionRow(row: MarketDailyRow) {
+  return CONSTRUCTION_RESOURCE_NAMES.has(row.resource_name.toLowerCase());
 }
 
 async function getPreviousIndexValue(
@@ -268,13 +329,16 @@ async function collectRealm(
 
   for (const date of dates) {
     const dayRows = rows.filter((row) => row.date === date);
-    const top50Rows = [...dayRows]
-      .sort((a, b) => b.market_value - a.market_value)
-      .slice(0, 50);
+    const rankedRows = [...dayRows].sort((a, b) => b.market_value - a.market_value);
 
     const indices = [
-      await buildIndex(supabase, "whole_market", realm, date, dayRows, "market_value"),
-      await buildIndex(supabase, "top_50_activity", realm, date, top50Rows, "market_value"),
+      await buildIndex(supabase, "total_market", realm, date, dayRows, "market_value"),
+      await buildIndex(supabase, "sc_10", realm, date, rankedRows.slice(0, 10), "market_value"),
+      await buildIndex(supabase, "sc_30", realm, date, rankedRows.slice(0, 30), "market_value"),
+      await buildIndex(supabase, "sc_50", realm, date, rankedRows.slice(0, 50), "market_value"),
+      await buildIndex(supabase, "research_only", realm, date, dayRows.filter(isResearchRow), "market_value"),
+      await buildIndex(supabase, "food_only", realm, date, dayRows.filter(isFoodRow), "market_value"),
+      await buildIndex(supabase, "construction_only", realm, date, dayRows.filter(isConstructionRow), "market_value"),
       await buildIndex(supabase, "equal_weight_market", realm, date, dayRows, "equal"),
     ].filter(Boolean);
 

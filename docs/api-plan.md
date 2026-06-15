@@ -28,8 +28,13 @@ GET /v1/realms/{realm}/market/resources/{resource}
 
 ## First Indices
 
-- `whole_market`
-- `top_50_activity`
+- `total_market`
+- `sc_10`
+- `sc_30`
+- `sc_50`
+- `research_only`
+- `food_only`
+- `construction_only`
 - `equal_weight_market`
 
 Each index exists once per realm.
@@ -41,4 +46,3 @@ Preferred weighting for activity indices:
 ```txt
 market_value = lastDayCandlestick.vwap * lastDayCandlestick.volume
 ```
-

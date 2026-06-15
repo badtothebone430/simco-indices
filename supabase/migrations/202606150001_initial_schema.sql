@@ -50,8 +50,13 @@ create table if not exists public.index_definitions (
 
 insert into public.index_definitions (code, name, description, weighting_method)
 values
-  ('whole_market', 'Whole Market', 'All tracked resource-quality pairs weighted by daily activity.', 'market_value'),
-  ('top_50_activity', 'Top 50 Activity', 'The 50 largest resource-quality pairs by daily market value.', 'market_value'),
+  ('total_market', 'Total Market', 'All tracked resource-quality pairs weighted by daily activity.', 'market_value'),
+  ('sc_10', 'SC-10', 'The 10 largest resource-quality pairs by daily market value.', 'market_value'),
+  ('sc_30', 'SC-30', 'The 30 largest resource-quality pairs by daily market value.', 'market_value'),
+  ('sc_50', 'SC-50', 'The 50 largest resource-quality pairs by daily market value.', 'market_value'),
+  ('research_only', 'Research Only', 'Research resources weighted by daily market activity.', 'market_value'),
+  ('food_only', 'Food Only', 'Food and beverage resources weighted by daily market activity.', 'market_value'),
+  ('construction_only', 'Construction Only', 'Construction-chain resources weighted by daily market activity.', 'market_value'),
   ('equal_weight_market', 'Equal Weight Market', 'All tracked resource-quality pairs weighted equally.', 'equal_weight')
 on conflict (code) do update set
   name = excluded.name,

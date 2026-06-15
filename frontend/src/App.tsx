@@ -6,9 +6,12 @@ import {
   BarChart3,
   CalendarClock,
   Database,
+  FlaskConical,
   Globe2,
+  Hammer,
   LineChart,
   RefreshCw,
+  Soup,
 } from 'lucide-react'
 import {
   Area,
@@ -24,7 +27,15 @@ import './App.css'
 
 type RealmId = 0 | 1
 
-type IndexCode = 'whole_market' | 'top_50_activity' | 'equal_weight_market'
+type IndexCode =
+  | 'total_market'
+  | 'sc_10'
+  | 'sc_30'
+  | 'sc_50'
+  | 'research_only'
+  | 'food_only'
+  | 'construction_only'
+  | 'equal_weight_market'
 
 type IndexDefinition = {
   code: IndexCode
@@ -59,16 +70,46 @@ const realms: Record<RealmId, string> = {
 
 const indexDefinitions: IndexDefinition[] = [
   {
-    code: 'whole_market',
-    name: 'Whole Market',
+    code: 'total_market',
+    name: 'Total Market',
     description: 'All tracked resources and qualities weighted by daily activity.',
     method: 'VWAP x volume',
   },
   {
-    code: 'top_50_activity',
-    name: 'Top 50 Activity',
-    description: 'The most traded resource-quality pairs by daily market value.',
-    method: 'Top market value',
+    code: 'sc_10',
+    name: 'SC-10',
+    description: 'The 10 largest resource-quality pairs by daily market value.',
+    method: 'Top 10',
+  },
+  {
+    code: 'sc_30',
+    name: 'SC-30',
+    description: 'The 30 largest resource-quality pairs by daily market value.',
+    method: 'Top 30',
+  },
+  {
+    code: 'sc_50',
+    name: 'SC-50',
+    description: 'The 50 largest resource-quality pairs by daily market value.',
+    method: 'Top 50',
+  },
+  {
+    code: 'research_only',
+    name: 'Research',
+    description: 'Research resources weighted by daily market activity.',
+    method: 'Sector',
+  },
+  {
+    code: 'food_only',
+    name: 'Food',
+    description: 'Food and beverage resources weighted by daily market activity.',
+    method: 'Sector',
+  },
+  {
+    code: 'construction_only',
+    name: 'Construction',
+    description: 'Construction-chain resources weighted by daily market activity.',
+    method: 'Sector',
   },
   {
     code: 'equal_weight_market',
@@ -86,7 +127,7 @@ const demoSeries: IndexPoint[] = Array.from({ length: 30 }, (_, index) => {
     date: date.toISOString().slice(0, 10),
     value: Math.round((1000 + wave + drift) * 100) / 100,
     realm_id: 0,
-    index_code: 'whole_market',
+    index_code: 'total_market',
     component_count: 946,
     total_market_value: 18_940_000_000 + index * 76_000_000,
   }
@@ -207,7 +248,7 @@ async function loadIndexComponents(realm: RealmId, indexCode: IndexCode, date: s
 
 function App() {
   const [realm, setRealm] = useState<RealmId>(0)
-  const [selectedIndex, setSelectedIndex] = useState<IndexCode>('whole_market')
+  const [selectedIndex, setSelectedIndex] = useState<IndexCode>('total_market')
   const [series, setSeries] = useState<IndexPoint[]>(demoSeries)
   const [components, setComponents] = useState<ComponentRow[]>(demoComponents)
   const [usingDemoData, setUsingDemoData] = useState(true)
@@ -250,7 +291,7 @@ function App() {
             value:
               point.value +
               (realm === 1 ? 34 : 0) +
-              (selectedIndex === 'top_50_activity' ? 86 : selectedIndex === 'equal_weight_market' ? -42 : 0),
+              (selectedIndex === 'sc_10' ? 110 : selectedIndex === 'equal_weight_market' ? -42 : 0),
           })),
         )
         setComponents(demoComponents)
@@ -321,8 +362,11 @@ function App() {
             type="button"
           >
             <span className="tile-icon">
-              {item.code === 'whole_market' && <LineChart size={18} />}
-              {item.code === 'top_50_activity' && <Activity size={18} />}
+              {item.code === 'total_market' && <LineChart size={18} />}
+              {(item.code === 'sc_10' || item.code === 'sc_30' || item.code === 'sc_50') && <Activity size={18} />}
+              {item.code === 'research_only' && <FlaskConical size={18} />}
+              {item.code === 'food_only' && <Soup size={18} />}
+              {item.code === 'construction_only' && <Hammer size={18} />}
               {item.code === 'equal_weight_market' && <BarChart3 size={18} />}
             </span>
             <span>
