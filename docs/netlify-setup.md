@@ -23,8 +23,10 @@ Once the frontend is scaffolded, expected settings will be:
 ```txt
 Base directory: frontend
 Build command: npm run build
-Publish directory: frontend/dist
+Publish directory: dist
 ```
+
+These are also committed in `netlify.toml`, so Netlify should detect them automatically.
 
 ## Environment Variables
 
@@ -41,4 +43,3 @@ Never expose these in the frontend:
 SUPABASE_SERVICE_ROLE_KEY
 SIMCOTOOLS_PRIVATE_KEY
 ```
-
