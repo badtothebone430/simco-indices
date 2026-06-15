@@ -36,6 +36,9 @@ GET /v1/realms/{realm}/market/resources/{resource}
 - `food_only`
 - `construction_only`
 - `equal_weight_market`
+- `quality_0`
+- `quality_0_with_research`
+- `quality_1` through `quality_12`
 
 Each index exists once per realm.
 
@@ -54,6 +57,6 @@ market date in each realm. Older `lastDayCandlestick` dates can appear on
 illiquid resources, but those are stale per-resource observations rather than a
 complete historical market snapshot.
 
-Historical charts will build naturally as the daily collector runs. A separate
-backfill should use the candlesticks endpoint so each historical date is
-computed from a deliberate daily basket.
+Historical charts build naturally as the daily collector runs. The manual
+`Backfill 30 days` workflow uses the candlesticks endpoint so each historical
+date is computed from a deliberate daily basket.

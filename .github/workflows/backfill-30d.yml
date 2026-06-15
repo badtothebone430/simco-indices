@@ -1,0 +1,38 @@
+name: Backfill 30 days
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of latest market days to backfill"
+        required: true
+        default: "30"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: collector
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: collector/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Backfill market data
+        run: npm run backfill:30d
+        env:
+          BACKFILL_DAYS: ${{ inputs.days }}
+          SIMCO_SUPABASE_URL: ${{ secrets.SIMCO_SUPABASE_URL }}
+          SIMCO_SUPABASE_SECRET_KEY: ${{ secrets.SIMCO_SUPABASE_SECRET_KEY }}
+

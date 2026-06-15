@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "collect": "node collect-market.mjs"
+    "collect": "node collect-market.mjs",
+    "backfill:30d": "node backfill-30d.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2"
   }
 }
-

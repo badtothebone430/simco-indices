@@ -5,6 +5,7 @@ const REALMS = [0, 1]
 const RATE_LIMIT_DELAY_MS = 2500
 const MAX_FETCH_ATTEMPTS = 5
 const BASE_INDEX_VALUE = 1000
+const BACKFILL_DAYS = Number(process.env.BACKFILL_DAYS ?? 30)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 
 const FOOD_RESOURCE_NAMES = new Set([
@@ -109,47 +110,29 @@ async function fetchResources(realm) {
   return data.resources ?? []
 }
 
-async function fetchResourceMarket(realm, resourceId) {
-  return fetchJson(`/v1/realms/${realm}/market/resources/${resourceId}`)
+async function fetchPrices(realm) {
+  const data = await fetchJson(`/v1/realms/${realm}/market/prices`)
+  return data.prices ?? []
+}
+
+async function fetchCandlesticks(realm, resourceId, quality) {
+  return fetchJson(`/v1/realms/${realm}/market/resources/${resourceId}/${quality}/candlesticks`)
 }
 
 function toDateOnly(value) {
   return value.slice(0, 10)
 }
 
-function buildMarketRows(realm, market) {
-  const resource = market.resource
-  const summaries = resource.summariesByQuality ?? []
+function isResearchRow(row) {
+  return row.resource_name.toLowerCase().includes('research')
+}
 
-  return summaries.flatMap((summary) => {
-    const candle = summary.lastDayCandlestick
-    if (!candle?.date || !candle.vwap || !candle.volume) {
-      return []
-    }
+function isFoodRow(row) {
+  return FOOD_RESOURCE_NAMES.has(row.resource_name.toLowerCase())
+}
 
-    const vwap = Number(candle.vwap)
-    const volume = Number(candle.volume)
-
-    if (!Number.isFinite(vwap) || !Number.isFinite(volume) || vwap <= 0 || volume <= 0) {
-      return []
-    }
-
-    return [
-      {
-        realm_id: realm,
-        resource_id: resource.resourceId,
-        resource_name: resource.resourceName,
-        quality: summary.quality,
-        date: toDateOnly(candle.date),
-        close: candle.close ?? null,
-        vwap,
-        vwap_change_percent: candle.previousVWAPPercentageChange ?? null,
-        volume,
-        market_value: vwap * volume,
-        raw: summary,
-      },
-    ]
-  })
+function isConstructionRow(row) {
+  return CONSTRUCTION_RESOURCE_NAMES.has(row.resource_name.toLowerCase())
 }
 
 function weightedReturn(rows, weightField) {
@@ -174,20 +157,17 @@ function weightedReturn(rows, weightField) {
   }, 0) / totalWeight
 }
 
-function isResearchRow(row) {
-  return row.resource_name.toLowerCase().includes('research')
-}
-
-function isFoodRow(row) {
-  return FOOD_RESOURCE_NAMES.has(row.resource_name.toLowerCase())
-}
-
-function isConstructionRow(row) {
-  return CONSTRUCTION_RESOURCE_NAMES.has(row.resource_name.toLowerCase())
-}
-
-function qualityIndexSpecs(dateRows) {
+function indexSpecRows(dateRows) {
+  const rankedRows = [...dateRows].sort((a, b) => b.market_value - a.market_value)
   return [
+    ['total_market', dateRows, 'market_value'],
+    ['sc_10', rankedRows.slice(0, 10), 'market_value'],
+    ['sc_30', rankedRows.slice(0, 30), 'market_value'],
+    ['sc_50', rankedRows.slice(0, 50), 'market_value'],
+    ['research_only', dateRows.filter(isResearchRow), 'market_value'],
+    ['food_only', dateRows.filter(isFoodRow), 'market_value'],
+    ['construction_only', dateRows.filter(isConstructionRow), 'market_value'],
+    ['equal_weight_market', dateRows, 'equal'],
     ['quality_0', dateRows.filter((row) => row.quality === 0 && !isResearchRow(row)), 'market_value'],
     ['quality_0_with_research', dateRows.filter((row) => row.quality === 0), 'market_value'],
     ...QUALITY_LEVELS.slice(1).map((quality) => [
@@ -198,56 +178,54 @@ function qualityIndexSpecs(dateRows) {
   ]
 }
 
-async function getPreviousIndexValue(supabase, indexCode, realm, date) {
-  const { data, error } = await supabase
-    .from('index_values')
-    .select('value')
-    .eq('index_code', indexCode)
-    .eq('realm_id', realm)
-    .lt('date', date)
-    .order('date', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+function buildBackfillIndices(realm, rows, dates) {
+  const previousValues = new Map()
+  const indexValues = []
+  const indexComponents = []
 
-  if (error) {
-    throw new Error(`previous index lookup failed: ${error.message}`)
+  for (const date of dates) {
+    const dateRows = rows.filter((row) => row.date === date)
+
+    for (const [indexCode, selectedRows, weightField] of indexSpecRows(dateRows)) {
+      if (selectedRows.length === 0) {
+        continue
+      }
+
+      const previousValue = previousValues.get(indexCode) ?? BASE_INDEX_VALUE
+      const dailyReturn = previousValues.has(indexCode) ? weightedReturn(selectedRows, weightField) ?? 0 : 0
+      const value = previousValue * (1 + dailyReturn)
+      previousValues.set(indexCode, value)
+
+      const totalMarketValue = selectedRows.reduce((sum, row) => sum + row.market_value, 0)
+      const denominator = weightField === 'equal' ? selectedRows.length : totalMarketValue
+
+      indexValues.push({
+        index_code: indexCode,
+        realm_id: realm,
+        date,
+        value,
+        component_count: selectedRows.length,
+        total_market_value: totalMarketValue,
+      })
+
+      indexComponents.push(
+        ...selectedRows.map((row) => ({
+          index_code: indexCode,
+          realm_id: realm,
+          date,
+          resource_id: row.resource_id,
+          resource_name: row.resource_name,
+          quality: row.quality,
+          weight: weightField === 'equal' ? 1 / selectedRows.length : row.market_value / denominator,
+          vwap: row.vwap,
+          volume: row.volume,
+          market_value: row.market_value,
+        })),
+      )
+    }
   }
 
-  return Number(data?.value ?? BASE_INDEX_VALUE)
-}
-
-async function buildIndex(supabase, indexCode, realm, date, rows, weightField) {
-  const dailyReturn = weightedReturn(rows, weightField)
-  if (dailyReturn === null) {
-    return null
-  }
-
-  const previousValue = await getPreviousIndexValue(supabase, indexCode, realm, date)
-  const totalMarketValue = rows.reduce((sum, row) => sum + row.market_value, 0)
-  const denominator = weightField === 'equal' ? rows.length : totalMarketValue
-
-  return {
-    value: {
-      index_code: indexCode,
-      realm_id: realm,
-      date,
-      value: previousValue * (1 + dailyReturn),
-      component_count: rows.length,
-      total_market_value: totalMarketValue,
-    },
-    components: rows.map((row) => ({
-      index_code: indexCode,
-      realm_id: realm,
-      date,
-      resource_id: row.resource_id,
-      resource_name: row.resource_name,
-      quality: row.quality,
-      weight: weightField === 'equal' ? 1 / rows.length : row.market_value / denominator,
-      vwap: row.vwap,
-      volume: row.volume,
-      market_value: row.market_value,
-    })),
-  }
+  return { indexValues, indexComponents }
 }
 
 async function upsertInChunks(supabase, table, rows, onConflict) {
@@ -261,9 +239,48 @@ async function upsertInChunks(supabase, table, rows, onConflict) {
   }
 }
 
-async function collectRealm(supabase, realm) {
+function buildRowsFromCandles(realm, resource, quality, candlesticks) {
+  const sorted = [...candlesticks].sort((a, b) => a.date.localeCompare(b.date))
+
+  return sorted.flatMap((candle, index) => {
+    const vwap = Number(candle.vwap)
+    const volume = Number(candle.volume)
+    if (!candle.date || !Number.isFinite(vwap) || !Number.isFinite(volume) || vwap <= 0 || volume <= 0) {
+      return []
+    }
+
+    const previous = sorted[index - 1]
+    const previousVwap = previous ? Number(previous.vwap) : null
+    const vwapChange =
+      previousVwap && Number.isFinite(previousVwap) && previousVwap > 0 ? vwap / previousVwap - 1 : null
+
+    return [
+      {
+        realm_id: realm,
+        resource_id: resource.id,
+        resource_name: resource.name,
+        quality,
+        date: toDateOnly(candle.date),
+        close: candle.close ?? null,
+        vwap,
+        vwap_change_percent: vwapChange,
+        volume,
+        market_value: vwap * volume,
+        raw: candle,
+      },
+    ]
+  })
+}
+
+async function backfillRealm(supabase, realm) {
   const resources = await fetchResources(realm)
-  console.log(`Realm ${realm}: fetched ${resources.length} resources`)
+  const resourceById = new Map(resources.map((resource) => [resource.id, resource]))
+  const prices = await fetchPrices(realm)
+  const pairs = Array.from(new Set(prices.map((price) => `${price.resourceId}:${price.quality}`)))
+  const allRows = []
+  const skippedPairs = []
+
+  console.log(`Realm ${realm}: ${resources.length} resources, ${pairs.length} resource-quality pairs`)
 
   await upsertInChunks(
     supabase,
@@ -283,73 +300,40 @@ async function collectRealm(supabase, realm) {
     'realm_id,resource_id',
   )
 
-  const rows = []
-  const skippedResources = []
+  for (const [index, pair] of pairs.entries()) {
+    const [resourceIdRaw, qualityRaw] = pair.split(':')
+    const resourceId = Number(resourceIdRaw)
+    const quality = Number(qualityRaw)
+    const resource = resourceById.get(resourceId)
 
-  for (const [index, resource] of resources.entries()) {
+    if (!resource) {
+      continue
+    }
+
     await sleep(RATE_LIMIT_DELAY_MS)
+
     try {
-      const market = await fetchResourceMarket(realm, resource.id)
-      rows.push(...buildMarketRows(realm, market))
+      const data = await fetchCandlesticks(realm, resourceId, quality)
+      allRows.push(...buildRowsFromCandles(realm, resource, quality, data.candlesticks ?? []))
     } catch (error) {
       if (error instanceof SimcotoolsError && (error.status === 404 || error.status === 422)) {
-        skippedResources.push({
-          resourceId: resource.id,
-          name: resource.name,
-          status: error.status,
-        })
+        skippedPairs.push({ resourceId, quality, status: error.status })
         continue
       }
       throw error
     }
 
-    if ((index + 1) % 25 === 0) {
-      console.log(`Realm ${realm}: processed ${index + 1}/${resources.length} resources`)
+    if ((index + 1) % 50 === 0) {
+      console.log(`Realm ${realm}: fetched ${index + 1}/${pairs.length} candlestick series`)
     }
   }
+
+  const targetDates = Array.from(new Set(allRows.map((row) => row.date))).sort().slice(-BACKFILL_DAYS)
+  const targetDateSet = new Set(targetDates)
+  const rows = allRows.filter((row) => targetDateSet.has(row.date))
+  const { indexValues, indexComponents } = buildBackfillIndices(realm, rows, targetDates)
 
   await upsertInChunks(supabase, 'market_daily', rows, 'realm_id,resource_id,quality,date')
-
-  const latestDate = rows
-    .map((row) => row.date)
-    .sort()
-    .at(-1)
-  const dates = latestDate ? [latestDate] : []
-  const indexValues = []
-  const indexComponents = []
-
-  for (const date of dates) {
-    const dayRows = rows.filter((row) => row.date === date)
-    const rankedRows = [...dayRows].sort((a, b) => b.market_value - a.market_value)
-    const indices = [
-      await buildIndex(supabase, 'total_market', realm, date, dayRows, 'market_value'),
-      await buildIndex(supabase, 'sc_10', realm, date, rankedRows.slice(0, 10), 'market_value'),
-      await buildIndex(supabase, 'sc_30', realm, date, rankedRows.slice(0, 30), 'market_value'),
-      await buildIndex(supabase, 'sc_50', realm, date, rankedRows.slice(0, 50), 'market_value'),
-      await buildIndex(supabase, 'research_only', realm, date, dayRows.filter(isResearchRow), 'market_value'),
-      await buildIndex(supabase, 'food_only', realm, date, dayRows.filter(isFoodRow), 'market_value'),
-      await buildIndex(
-        supabase,
-        'construction_only',
-        realm,
-        date,
-        dayRows.filter(isConstructionRow),
-        'market_value',
-      ),
-      await buildIndex(supabase, 'equal_weight_market', realm, date, dayRows, 'equal'),
-      ...(await Promise.all(
-        qualityIndexSpecs(dayRows).map(([indexCode, selectedRows, weightField]) =>
-          buildIndex(supabase, indexCode, realm, date, selectedRows, weightField),
-        ),
-      )),
-    ].filter(Boolean)
-
-    for (const index of indices) {
-      indexValues.push(index.value)
-      indexComponents.push(...index.components)
-    }
-  }
-
   await upsertInChunks(supabase, 'index_values', indexValues, 'index_code,realm_id,date')
   await upsertInChunks(
     supabase,
@@ -360,8 +344,9 @@ async function collectRealm(supabase, realm) {
 
   return {
     realm,
-    resources: resources.length,
-    skippedResources,
+    pairs: pairs.length,
+    skippedPairs,
+    dates: targetDates.length,
     marketRows: rows.length,
     indexValues: indexValues.length,
     indexComponents: indexComponents.length,
@@ -382,10 +367,10 @@ async function main() {
 
   const results = []
   for (const realm of REALMS) {
-    results.push(await collectRealm(supabase, realm))
+    results.push(await backfillRealm(supabase, realm))
   }
 
-  console.log(JSON.stringify({ ok: true, collectedAt: new Date().toISOString(), results }, null, 2))
+  console.log(JSON.stringify({ ok: true, backfillDays: BACKFILL_DAYS, results }, null, 2))
 }
 
 main().catch((error) => {

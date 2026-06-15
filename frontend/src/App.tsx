@@ -10,8 +10,10 @@ import {
   Globe2,
   Hammer,
   LineChart,
+  Moon,
   RefreshCw,
   Soup,
+  Sun,
 } from 'lucide-react'
 import {
   Area,
@@ -27,15 +29,8 @@ import './App.css'
 
 type RealmId = 0 | 1
 
-type IndexCode =
-  | 'total_market'
-  | 'sc_10'
-  | 'sc_30'
-  | 'sc_50'
-  | 'research_only'
-  | 'food_only'
-  | 'construction_only'
-  | 'equal_weight_market'
+type IndexCode = string
+type Theme = 'light' | 'dark'
 
 type IndexDefinition = {
   code: IndexCode
@@ -67,6 +62,8 @@ const realms: Record<RealmId, string> = {
   0: 'Magnates',
   1: 'Entrepreneurs',
 }
+
+const qualityLevels = Array.from({ length: 13 }, (_, quality) => quality)
 
 const indexDefinitions: IndexDefinition[] = [
   {
@@ -118,6 +115,22 @@ const indexDefinitions: IndexDefinition[] = [
     method: 'Equal weight',
   },
 ]
+
+function qualityIndexCode(quality: number, includeResearch: boolean) {
+  return quality === 0 && includeResearch ? 'quality_0_with_research' : `quality_${quality}`
+}
+
+function qualityIndexDefinition(quality: number, includeResearch: boolean): IndexDefinition {
+  const includesResearch = quality === 0 && includeResearch
+  return {
+    code: qualityIndexCode(quality, includeResearch),
+    name: includesResearch ? 'Q0 + Research' : `Q${quality}`,
+    description: includesResearch
+      ? 'Quality 0 resources including research, weighted by daily market activity.'
+      : `Quality ${quality} resources weighted by daily market activity.`,
+    method: includesResearch ? 'Quality + research' : 'Quality',
+  }
+}
 
 const demoSeries: IndexPoint[] = Array.from({ length: 30 }, (_, index) => {
   const date = new Date(Date.UTC(2026, 4, 17 + index))
@@ -249,12 +262,21 @@ async function loadIndexComponents(realm: RealmId, indexCode: IndexCode, date: s
 function App() {
   const [realm, setRealm] = useState<RealmId>(0)
   const [selectedIndex, setSelectedIndex] = useState<IndexCode>('total_market')
+  const [q0IncludesResearch, setQ0IncludesResearch] = useState(false)
+  const [theme, setTheme] = useState<Theme>(() => {
+    const stored = localStorage.getItem('simco-theme')
+    if (stored === 'light' || stored === 'dark') return stored
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
   const [series, setSeries] = useState<IndexPoint[]>(demoSeries)
   const [components, setComponents] = useState<ComponentRow[]>(demoComponents)
   const [usingDemoData, setUsingDemoData] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
 
-  const activeDefinition = indexDefinitions.find((item) => item.code === selectedIndex)!
+  const qualityDefinitions = qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch))
+  const activeDefinition =
+    [...indexDefinitions, ...qualityDefinitions].find((item) => item.code === selectedIndex) ??
+    indexDefinitions[0]
   const latest = series.at(-1) ?? demoSeries.at(-1)!
   const previous = series.at(-2) ?? latest
   const dailyChange = previous.value ? latest.value / previous.value - 1 : 0
@@ -272,6 +294,11 @@ function App() {
       })),
     [series],
   )
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('simco-theme', theme)
+  }, [theme])
 
   useEffect(() => {
     let isCurrent = true
@@ -320,6 +347,12 @@ function App() {
     }
   }, [realm, selectedIndex])
 
+  useEffect(() => {
+    if (selectedIndex === 'quality_0' || selectedIndex === 'quality_0_with_research') {
+      setSelectedIndex(qualityIndexCode(0, q0IncludesResearch))
+    }
+  }, [q0IncludesResearch, selectedIndex])
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -327,9 +360,19 @@ function App() {
           <p className="eyebrow">SimCompanies Market Indices</p>
           <h1>Realm-level resource market performance</h1>
         </div>
-        <div className="status-strip">
-          <span className={usingDemoData ? 'status-dot demo' : 'status-dot live'} />
-          {usingDemoData ? 'Demo data' : 'Supabase live'}
+        <div className="topbar-actions">
+          <button
+            aria-label={theme === 'dark' ? 'Use light mode' : 'Use dark mode'}
+            className="icon-button"
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            type="button"
+          >
+            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+          <div className="status-strip">
+            <span className={usingDemoData ? 'status-dot demo' : 'status-dot live'} />
+            {usingDemoData ? 'Demo data' : 'Supabase live'}
+          </div>
         </div>
       </header>
 
@@ -377,6 +420,38 @@ function App() {
         ))}
       </section>
 
+      <section className="quality-panel" aria-label="Quality indices">
+        <div className="quality-header">
+          <div>
+            <p className="eyebrow">Quality Indices</p>
+            <h2>Q0-Q12 activity baskets</h2>
+          </div>
+          <label className="toggle-row">
+            <input
+              checked={q0IncludesResearch}
+              onChange={(event) => setQ0IncludesResearch(event.target.checked)}
+              type="checkbox"
+            />
+            Include research in Q0
+          </label>
+        </div>
+        <div className="quality-grid">
+          {qualityLevels.map((quality) => {
+            const item = qualityIndexDefinition(quality, q0IncludesResearch)
+            return (
+              <button
+                className={`quality-tile ${item.code === selectedIndex ? 'active' : ''}`}
+                key={quality}
+                onClick={() => setSelectedIndex(item.code)}
+                type="button"
+              >
+                {item.name}
+              </button>
+            )
+          })}
+        </div>
+      </section>
+
       <section className="dashboard-grid">
         <div className="chart-panel">
           <div className="panel-header">
@@ -399,11 +474,11 @@ function App() {
               <AreaChart data={visibleSeries} margin={{ top: 8, right: 18, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="indexFill" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="0%" stopColor="#247a7b" stopOpacity={0.28} />
-                    <stop offset="100%" stopColor="#247a7b" stopOpacity={0} />
+                    <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28} />
+                    <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid stroke="#dde5e4" strokeDasharray="3 5" vertical={false} />
+                <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
                 <XAxis dataKey="label" minTickGap={28} tickLine={false} axisLine={false} />
                 <YAxis
                   domain={['dataMin - 20', 'dataMax + 20']}
@@ -419,7 +494,7 @@ function App() {
                 <Area
                   dataKey="value"
                   type="monotone"
-                  stroke="#247a7b"
+                  stroke="var(--accent)"
                   strokeWidth={3}
                   fill="url(#indexFill)"
                 />
