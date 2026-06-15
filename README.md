@@ -7,6 +7,7 @@ Static dashboard and scheduled data collector for SimCompanies market indices.
 - `frontend/` - Netlify-hosted web app.
 - `collector/` - scheduled job for fetching Simcotools data and computing indices.
 - `docs/` - project notes, API decisions, and setup instructions.
+- `supabase/` - database schema and Edge Function collector.
 
 ## Initial Architecture
 
@@ -19,4 +20,3 @@ Every index is calculated separately for both realms:
 
 - `0` - Magnates
 - `1` - Entrepreneurs
-

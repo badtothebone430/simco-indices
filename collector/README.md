@@ -12,3 +12,4 @@ Responsibilities:
 
 The Simcotools API has a global rate limit of 2 requests per second, so any per-resource collector must throttle requests.
 
+The first implementation lives in `../supabase/functions/collect-market`.

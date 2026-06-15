@@ -1,0 +1,5 @@
+project_id = "simco-indices"
+
+[functions.collect-market]
+verify_jwt = false
+
