@@ -47,7 +47,8 @@ type MarketDailyRow = {
 
 const SIMCOTOOLS_BASE_URL = "https://api.simcotools.com";
 const REALMS: RealmId[] = [0, 1];
-const RATE_LIMIT_DELAY_MS = 550;
+const RATE_LIMIT_DELAY_MS = 1250;
+const MAX_FETCH_ATTEMPTS = 5;
 const BASE_INDEX_VALUE = 1000;
 
 const FOOD_RESOURCE_NAMES = new Set([
@@ -103,19 +104,41 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${SIMCOTOOLS_BASE_URL}${path}`, {
-    headers: {
-      Accept: "application/json",
-      "Accept-Language": "en",
-    },
-  });
+class SimcotoolsError extends Error {
+  status: number;
 
-  if (!response.ok) {
-    throw new Error(`Simcotools ${path} failed with ${response.status}`);
+  constructor(path: string, status: number) {
+    super(`Simcotools ${path} failed with ${status}`);
+    this.status = status;
+  }
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt += 1) {
+    const response = await fetch(`${SIMCOTOOLS_BASE_URL}${path}`, {
+      headers: {
+        Accept: "application/json",
+        "Accept-Language": "en",
+      },
+    });
+
+    if (response.ok) {
+      return await response.json() as T;
+    }
+
+    if (response.status === 429 && attempt < MAX_FETCH_ATTEMPTS) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const retryDelay = Number.isFinite(retryAfter)
+        ? retryAfter * 1000
+        : RATE_LIMIT_DELAY_MS * attempt * 2;
+      await sleep(retryDelay);
+      continue;
+    }
+
+    throw new SimcotoolsError(path, response.status);
   }
 
-  return await response.json() as T;
+  throw new SimcotoolsError(path, 0);
 }
 
 async function fetchResources(realm: RealmId): Promise<Resource[]> {
@@ -309,11 +332,24 @@ async function collectRealm(
   );
 
   const rows: MarketDailyRow[] = [];
+  const skippedResources = [];
 
   for (const resource of resources) {
     await sleep(RATE_LIMIT_DELAY_MS);
-    const market = await fetchResourceMarket(realm, resource.id);
-    rows.push(...buildMarketRows(realm, market));
+    try {
+      const market = await fetchResourceMarket(realm, resource.id);
+      rows.push(...buildMarketRows(realm, market));
+    } catch (error) {
+      if (error instanceof SimcotoolsError && (error.status === 404 || error.status === 422)) {
+        skippedResources.push({
+          resourceId: resource.id,
+          name: resource.name,
+          status: error.status,
+        });
+        continue;
+      }
+      throw error;
+    }
   }
 
   await upsertInChunks(
@@ -365,6 +401,7 @@ async function collectRealm(
   return {
     realm,
     resources: resources.length,
+    skippedResources,
     marketRows: rows.length,
     indexValues: indexValues.length,
     indexComponents: indexComponents.length,
@@ -382,12 +419,13 @@ Deno.serve(async (request) => {
       }
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const supabaseUrl = Deno.env.get("SIMCO_SUPABASE_URL") ?? Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey =
+      Deno.env.get("SIMCO_SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
     if (!supabaseUrl || !serviceRoleKey) {
       return Response.json(
-        { error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" },
+        { error: "Missing SIMCO_SUPABASE_URL or SIMCO_SUPABASE_SECRET_KEY" },
         { status: 500 },
       );
     }

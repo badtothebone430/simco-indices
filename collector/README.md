@@ -12,4 +12,24 @@ Responsibilities:
 
 The Simcotools API has a global rate limit of 2 requests per second, so any per-resource collector must throttle requests.
 
-The first implementation lives in `../supabase/functions/collect-market`.
+The production collector lives in `collect-market.mjs` and runs through GitHub Actions.
+
+## Local Run
+
+```powershell
+npm install
+$env:SIMCO_SUPABASE_URL="https://<project-ref>.supabase.co"
+$env:SIMCO_SUPABASE_SECRET_KEY="<secret-key>"
+npm run collect
+```
+
+## GitHub Actions
+
+Set these repository secrets:
+
+```txt
+SIMCO_SUPABASE_URL
+SIMCO_SUPABASE_SECRET_KEY
+```
+
+The workflow is `.github/workflows/collect-market.yml`.

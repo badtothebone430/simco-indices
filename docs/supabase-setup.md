@@ -20,8 +20,8 @@ VITE_SUPABASE_ANON_KEY
 The collector gets:
 
 ```txt
-SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
+SIMCO_SUPABASE_URL
+SIMCO_SUPABASE_SECRET_KEY
 COLLECTOR_SECRET
 ```
 
@@ -40,49 +40,54 @@ supabase link --project-ref <project-ref>
 supabase db push
 ```
 
-## 3. Deploy Collector
+## 3. Configure GitHub Collector
 
-From `simco-indices/`:
+The full collector is too long-running for Supabase Edge Function resource limits, so run it as a GitHub Actions scheduled workflow.
 
-```powershell
-supabase functions deploy collect-market
-```
-
-Set secrets:
-
-```powershell
-supabase secrets set SUPABASE_URL="<project-url>"
-supabase secrets set SUPABASE_SERVICE_ROLE_KEY="<service-role-key>"
-supabase secrets set COLLECTOR_SECRET="<random-long-secret>"
-```
-
-## 4. Test Collector
-
-```powershell
-supabase functions invoke collect-market --no-verify-jwt --headers "x-collector-secret: <random-long-secret>"
-```
-
-The first run should take a few minutes because Simcotools has a 2 requests/second global rate limit and the collector fetches per-resource market summaries for both realms.
-
-## 5. Schedule Daily Run
-
-Use Supabase scheduled functions / cron to call:
+In GitHub, open repository settings:
 
 ```txt
-https://<project-ref>.functions.supabase.co/collect-market
+Settings -> Secrets and variables -> Actions -> New repository secret
 ```
 
-Include this header:
+Add:
 
 ```txt
-x-collector-secret: <random-long-secret>
+SIMCO_SUPABASE_URL=https://<project-ref>.supabase.co
+SIMCO_SUPABASE_SECRET_KEY=<secret-key>
 ```
 
-Recommended schedule:
+The workflow is:
+
+```txt
+.github/workflows/collect-market.yml
+```
+
+It runs daily at:
 
 ```txt
 30 1 * * *
 ```
 
-That runs at 01:30 UTC daily.
+That is 01:30 UTC.
 
+## 4. Manual Test
+
+After pushing to GitHub, open:
+
+```txt
+Actions -> Collect market data -> Run workflow
+```
+
+The first run should take several minutes because Simcotools has a 2 requests/second global rate limit and the collector fetches per-resource market summaries for both realms.
+
+## 5. Optional Local Test
+
+From `collector/`:
+
+```powershell
+npm install
+$env:SIMCO_SUPABASE_URL="https://<project-ref>.supabase.co"
+$env:SIMCO_SUPABASE_SECRET_KEY="<secret-key>"
+npm run collect
+```

@@ -1,0 +1,12 @@
+{
+  "name": "simco-indices-collector",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "collect": "node collect-market.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.2"
+  }
+}
+
