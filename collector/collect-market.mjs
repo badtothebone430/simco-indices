@@ -289,7 +289,11 @@ async function collectRealm(supabase, realm) {
 
   await upsertInChunks(supabase, 'market_daily', rows, 'realm_id,resource_id,quality,date')
 
-  const dates = Array.from(new Set(rows.map((row) => row.date)))
+  const latestDate = rows
+    .map((row) => row.date)
+    .sort()
+    .at(-1)
+  const dates = latestDate ? [latestDate] : []
   const indexValues = []
   const indexComponents = []
 
@@ -362,4 +366,3 @@ main().catch((error) => {
   console.error(error)
   process.exitCode = 1
 })
-

@@ -46,3 +46,14 @@ Preferred weighting for activity indices:
 ```txt
 market_value = lastDayCandlestick.vwap * lastDayCandlestick.volume
 ```
+
+## History Policy
+
+The daily collector should only generate index values for the latest completed
+market date in each realm. Older `lastDayCandlestick` dates can appear on
+illiquid resources, but those are stale per-resource observations rather than a
+complete historical market snapshot.
+
+Historical charts will build naturally as the daily collector runs. A separate
+backfill should use the candlesticks endpoint so each historical date is
+computed from a deliberate daily basket.
