@@ -47,7 +47,7 @@ type MarketDailyRow = {
 
 const SIMCOTOOLS_BASE_URL = "https://api.simcotools.com";
 const REALMS: RealmId[] = [0, 1];
-const RATE_LIMIT_DELAY_MS = 1250;
+const RATE_LIMIT_DELAY_MS = 2500;
 const MAX_FETCH_ATTEMPTS = 5;
 const BASE_INDEX_VALUE = 1000;
 
@@ -104,6 +104,17 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function retryDelayMs(response: Response, attempt: number) {
+  const retryAfterHeader = response.headers.get("retry-after");
+  const retryAfter = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader);
+
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return retryAfter * 1000;
+  }
+
+  return RATE_LIMIT_DELAY_MS * attempt * 3 + Math.floor(Math.random() * 1000);
+}
+
 class SimcotoolsError extends Error {
   status: number;
 
@@ -127,10 +138,7 @@ async function fetchJson<T>(path: string): Promise<T> {
     }
 
     if (response.status === 429 && attempt < MAX_FETCH_ATTEMPTS) {
-      const retryAfter = Number(response.headers.get("retry-after"));
-      const retryDelay = Number.isFinite(retryAfter)
-        ? retryAfter * 1000
-        : RATE_LIMIT_DELAY_MS * attempt * 2;
+      const retryDelay = retryDelayMs(response, attempt);
       await sleep(retryDelay);
       continue;
     }
