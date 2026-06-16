@@ -6,8 +6,10 @@ import {
   BarChart3,
   CalendarClock,
   Car,
+  CircleHelp,
   Cpu,
   Database,
+  FileText,
   FlaskConical,
   Globe2,
   Hammer,
@@ -47,7 +49,7 @@ import './App.css'
 type RealmId = 0 | 1
 type IndexCode = string
 type Theme = 'light' | 'dark'
-type AppView = 'dashboard' | 'overview' | 'compare'
+type AppView = 'dashboard' | 'overview' | 'compare' | 'tools' | 'changelog'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
@@ -250,9 +252,169 @@ type ChartFilters = {
   showTechnicals: boolean
 }
 
+type TourStep = {
+  selector: string
+  view: AppView
+  title: string
+  body: string
+}
+
+type ChangelogEntry = {
+  date: string
+  title: string
+  items: string[]
+}
+
 const comparisonStateKey = 'simco-comparison-state'
 const comparisonPresetsKey = 'simco-comparison-presets'
 const chartFiltersKey = 'simco-chart-filters'
+const tourDismissedKey = 'simco-tour-dismissed'
+
+const tourSteps: TourStep[] = [
+  {
+    selector: '.view-tabs',
+    view: 'dashboard',
+    title: 'Switch workspaces',
+    body: 'Use these tabs to move between the dashboard, the main index view, and deeper comparisons.',
+  },
+  {
+    selector: '.control-row',
+    view: 'dashboard',
+    title: 'Pick a realm',
+    body: 'Magnates and Entrepreneurs are tracked separately, so realm changes affect every chart and signal.',
+  },
+  {
+    selector: '.chart-overlay-controls',
+    view: 'dashboard',
+    title: 'Layer context',
+    body: 'Toggle phases, events, contests, and technicals on charts whenever you need more context.',
+  },
+  {
+    selector: '.market-summary-grid',
+    view: 'dashboard',
+    title: 'Market pulse',
+    body: 'These cards show each realm total market with quick trend lines and links into the full chart.',
+  },
+  {
+    selector: '.signal-grid',
+    view: 'dashboard',
+    title: 'Daily signals',
+    body: 'The dashboard highlights the biggest market story and the most relevant resource to watch.',
+  },
+  {
+    selector: '.technical-panel',
+    view: 'dashboard',
+    title: 'Technical setup',
+    body: 'This highlights the strongest technical resource setup and shows zones or channels directly on the mini chart.',
+  },
+  {
+    selector: '.index-grid',
+    view: 'overview',
+    title: 'Choose an index',
+    body: 'The overview page lets you switch between market-wide, category, quality, and top-resource indices.',
+  },
+  {
+    selector: '.quality-panel',
+    view: 'overview',
+    title: 'Quality filters',
+    body: 'Quality indices let you isolate Q0-Q12 behavior. Q0 can optionally include research resources.',
+  },
+  {
+    selector: '.chart-panel',
+    view: 'overview',
+    title: 'Read the main chart',
+    body: 'This chart shows the selected index over time, with optional phase, event, contest, and technical overlays.',
+  },
+  {
+    selector: '.components-panel',
+    view: 'overview',
+    title: 'See what drives it',
+    body: 'Components show which resources and qualities are contributing most to the selected index.',
+  },
+  {
+    selector: '.comparison-controls',
+    view: 'compare',
+    title: 'Build a comparison',
+    body: 'Compare indices or individual resources, choose realm and quality, then add up to six lines.',
+  },
+  {
+    selector: '.selection-strip',
+    view: 'compare',
+    title: 'Manage compared lines',
+    body: 'Selected lines appear here. Remove items quickly or save the whole setup as a preset.',
+  },
+  {
+    selector: '.comparison-panel .chart-wrap',
+    view: 'compare',
+    title: 'Compare movement',
+    body: 'Switch between percent and price views, adjust the timeframe, and resize the comparison chart.',
+  },
+  {
+    selector: '.tools-panel',
+    view: 'tools',
+    title: 'Useful tools',
+    body: 'This page links to other SimCompanies tools that are useful alongside these market indices.',
+  },
+  {
+    selector: '.changelog-panel',
+    view: 'changelog',
+    title: 'Track updates',
+    body: 'The changelog lists recent feature releases and data changes in one place.',
+  },
+]
+
+const changelogEntries: ChangelogEntry[] = [
+  {
+    date: '2026-06-16',
+    title: 'Guided tour, tools, and polish',
+    items: [
+      'Added first-visit guided spotlight tour with replay from the header.',
+      'Added useful tools tab with Coopers Tools and Simcotools links.',
+      'Added small UI improvements and clearer site footer details.',
+      'Made current basket tables scrollable with sticky headers.',
+    ],
+  },
+  {
+    date: '2026-06-15',
+    title: 'Dashboard and technical analysis',
+    items: [
+      'Added clean dashboard with realm market summaries, daily signals, and resources to watch.',
+      'Added technical analysis signal picker for strongest resource setups.',
+      'Added supply/demand zones and ascending/descending channel overlays.',
+      'Added mini charts and Go To buttons across dashboard cards.',
+    ],
+  },
+  {
+    date: '2026-06-14',
+    title: 'Comparison workspace',
+    items: [
+      'Added comparison mode for resources and indices across both realms.',
+      'Added percent and absolute value comparison views.',
+      'Added saved comparison presets and persistent filters.',
+      'Improved chart axis scaling for cleaner multi-line comparisons.',
+    ],
+  },
+  {
+    date: '2026-06-13',
+    title: 'Market context overlays',
+    items: [
+      'Added phase overlays for boom, normal, and recession periods.',
+      'Added event and contest markers with separated tooltips.',
+      'Added daily context collection from Simcotools data.',
+      'Improved dark mode chart tooltip contrast.',
+    ],
+  },
+  {
+    date: '2026-06-12',
+    title: 'Index expansion',
+    items: [
+      'Added SC-10, SC-30, SC-50, total market, equal-weight market, food, construction, research, and quality indices.',
+      'Added category index support for major resource groups.',
+      'Added 30-day historical backfill support.',
+      'Added daily GitHub Actions data collection workflow.',
+    ],
+  },
+]
 
 const realms: Record<RealmId, string> = {
   0: 'Magnates',
@@ -1704,6 +1866,93 @@ function MiniChart({
   )
 }
 
+function GuidedTour({
+  steps,
+  stepIndex,
+  onBack,
+  onDismiss,
+  onNext,
+}: {
+  steps: TourStep[]
+  stepIndex: number
+  onBack: () => void
+  onDismiss: () => void
+  onNext: () => void
+}) {
+  const step = steps[stepIndex]
+  const [rect, setRect] = useState<DOMRect | null>(null)
+
+  useEffect(() => {
+    function updateRect() {
+      const target = document.querySelector(step.selector)
+      if (!target) {
+        setRect(null)
+        return
+      }
+      setRect(target.getBoundingClientRect())
+    }
+
+    const target = document.querySelector(step.selector)
+    target?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    window.setTimeout(updateRect, 220)
+    updateRect()
+    window.addEventListener('resize', updateRect)
+    window.addEventListener('scroll', updateRect, true)
+
+    return () => {
+      window.removeEventListener('resize', updateRect)
+      window.removeEventListener('scroll', updateRect, true)
+    }
+  }, [step.selector])
+
+  const padding = 10
+  const spotlightStyle = rect
+    ? {
+        height: rect.height + padding * 2,
+        left: rect.left - padding,
+        top: rect.top - padding,
+        width: rect.width + padding * 2,
+      }
+    : undefined
+  const cardStyle = rect
+    ? {
+        left: Math.min(Math.max(rect.left, 16), window.innerWidth - 356),
+        top:
+          rect.bottom + 18 < window.innerHeight - 210
+            ? rect.bottom + 18
+            : Math.max(16, rect.top - 218),
+      }
+    : undefined
+  const cardPlacement = rect && rect.bottom + 18 < window.innerHeight - 210 ? 'below' : 'above'
+
+  return (
+    <div className="guided-tour" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+      <div className="tour-scrim" />
+      <div className="tour-spotlight" style={spotlightStyle} />
+      <section className={`tour-card ${cardPlacement}`} style={cardStyle}>
+        <span className="tour-count">
+          {stepIndex + 1} of {steps.length}
+        </span>
+        <h2 id="tour-title">{step.title}</h2>
+        <p>{step.body}</p>
+        <div className="tour-actions">
+          <button className="ghost-button" onClick={onDismiss} type="button">
+            Skip
+          </button>
+          <div>
+            <button className="ghost-button" disabled={stepIndex === 0} onClick={onBack} type="button">
+              Back
+            </button>
+            <button className="command-button" onClick={onNext} type="button">
+              {stepIndex === steps.length - 1 ? 'Done' : 'Next'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function App() {
   const storedComparisonState = useMemo(
     () => readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
@@ -1771,6 +2020,8 @@ function App() {
   })
   const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
+  const [showTour, setShowTour] = useState(() => localStorage.getItem(tourDismissedKey) !== 'true')
+  const [tourStepIndex, setTourStepIndex] = useState(0)
 
   const qualityDefinitions = qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch))
   const allIndexDefinitions = useMemo(
@@ -2152,6 +2403,38 @@ function App() {
     setComparisonPresets((current) => current.filter((preset) => preset.id !== id))
   }
 
+  function dismissTour() {
+    localStorage.setItem(tourDismissedKey, 'true')
+    setShowTour(false)
+  }
+
+  function replayTour() {
+    setActiveView('dashboard')
+    setTourStepIndex(0)
+    setShowTour(true)
+  }
+
+  useEffect(() => {
+    if (!showTour) return
+    setActiveView(tourSteps[tourStepIndex].view)
+  }, [showTour, tourStepIndex])
+
+  function nextTourStep() {
+    if (tourStepIndex >= tourSteps.length - 1) {
+      dismissTour()
+      return
+    }
+    const nextIndex = tourStepIndex + 1
+    setActiveView(tourSteps[nextIndex].view)
+    setTourStepIndex(nextIndex)
+  }
+
+  function previousTourStep() {
+    const previousIndex = Math.max(0, tourStepIndex - 1)
+    setActiveView(tourSteps[previousIndex].view)
+    setTourStepIndex(previousIndex)
+  }
+
   function goToDashboardTarget(target: DashboardTarget) {
     if (target.kind === 'index') {
       setRealm(target.realm)
@@ -2185,6 +2468,15 @@ function App() {
           <h1>Realm-level resource market performance</h1>
         </div>
         <div className="topbar-actions">
+          <button
+            aria-label="Show guided tour"
+            className="icon-button"
+            onClick={replayTour}
+            title="Replay guided tour"
+            type="button"
+          >
+            <CircleHelp size={18} />
+          </button>
           <button
             aria-label={theme === 'dark' ? 'Use light mode' : 'Use dark mode'}
             className="icon-button"
@@ -2277,6 +2569,22 @@ function App() {
         >
           <BarChart3 size={16} />
           Comparisons
+        </button>
+        <button
+          className={activeView === 'tools' ? 'active' : ''}
+          onClick={() => setActiveView('tools')}
+          type="button"
+        >
+          <Hammer size={16} />
+          Tools
+        </button>
+        <button
+          className={activeView === 'changelog' ? 'active' : ''}
+          onClick={() => setActiveView('changelog')}
+          type="button"
+        >
+          <FileText size={16} />
+          Changelog
         </button>
       </nav>
 
@@ -2436,6 +2744,11 @@ function App() {
                 <span>
                   <strong>{item.name}</strong>
                   <small>{item.method}</small>
+                </span>
+                <span className="index-tooltip" role="tooltip">
+                  <strong>{item.name}</strong>
+                  <span>{item.description}</span>
+                  <small>Method: {item.method}</small>
                 </span>
               </button>
             ))}
@@ -2597,7 +2910,6 @@ function App() {
                     <tr key={`${row.resource_id}-${row.quality}`}>
                       <td>
                         <strong>{row.resource_name}</strong>
-                        <span>#{row.resource_id}</span>
                       </td>
                       <td>{row.quality}</td>
                       <td>{formatPercent(row.weight)}</td>
@@ -2883,13 +3195,93 @@ function App() {
             </ResponsiveContainer>
           </div>
         </section>
+      ) : activeView === 'tools' ? (
+        <section className="tools-panel view-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Useful Tools</p>
+              <h2>Other SimCompanies resources</h2>
+              <p>External tools made by other community developers.</p>
+            </div>
+          </div>
+
+          <div className="tools-grid">
+            <a className="tool-card" href="https://cooperinc.xyz" rel="noreferrer" target="_blank">
+              <span className="tile-icon">
+                <Hammer size={18} />
+              </span>
+              <div>
+                <strong>Coopers Tools</strong>
+                <small>cooperinc.xyz</small>
+              </div>
+              <ArrowUpRight size={17} />
+            </a>
+            <a className="tool-card" href="https://simcotools.com" rel="noreferrer" target="_blank">
+              <span className="tile-icon">
+                <LineChartIcon size={18} />
+              </span>
+              <div>
+                <strong>Simcotools</strong>
+                <small>simcotools.com</small>
+              </div>
+              <ArrowUpRight size={17} />
+            </a>
+          </div>
+        </section>
+      ) : activeView === 'changelog' ? (
+        <section className="changelog-panel view-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Changelog</p>
+              <h2>Latest updates</h2>
+              <p>Major feature releases and data pipeline changes for the indices site.</p>
+            </div>
+          </div>
+
+          <div className="changelog-list">
+            {changelogEntries.map((entry) => (
+              <article className="changelog-entry" key={`${entry.date}-${entry.title}`}>
+                <time dateTime={entry.date}>{formatDisplayDate(entry.date)}</time>
+                <div>
+                  <h3>{entry.title}</h3>
+                  <ul>
+                    {entry.items.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       ) : null}
 
       <footer className="site-footer">
+        <a
+          className="creator-credit"
+          href="https://www.simcompanies.com/company/0/DevTech-Industries%20Ltd./"
+          rel="noreferrer"
+          target="_blank"
+        >
+          <img
+            alt="DevTech Industries logo"
+            src="https://d1fxy698ilbz6u.cloudfront.net/logo/a9aa06251d8a6699b825066fbb7e781ba96f6579.png"
+          />
+          <span>Made by Loki Clarke, DevTech Industries Ltd.</span>
+        </a>
         <span>&copy; {new Date().getFullYear()} SimCompanies Market Indices.</span>
-        <span>Unofficial fan-made tool. Not affiliated with SimCompanies or Simcotools.</span>
-        <span>Market data sourced from Simcotools.</span>
+        <span>Unofficial fan-made tool. Not affiliated with SimCompanies or Simcotools. Market data sourced from Simcotools.</span>
       </footer>
+
+      {showTour && (
+        <GuidedTour
+          onBack={previousTourStep}
+          onDismiss={dismissTour}
+          onNext={nextTourStep}
+          stepIndex={tourStepIndex}
+          steps={tourSteps}
+        />
+      )}
     </main>
   )
 }
