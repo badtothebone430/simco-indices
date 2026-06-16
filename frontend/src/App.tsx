@@ -35,6 +35,7 @@ import {
   Line,
   LineChart as RechartsLineChart,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -46,7 +47,7 @@ import './App.css'
 type RealmId = 0 | 1
 type IndexCode = string
 type Theme = 'light' | 'dark'
-type AppView = 'overview' | 'compare'
+type AppView = 'dashboard' | 'overview' | 'compare'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
@@ -112,6 +113,43 @@ type ChartContext = {
   contests: RealmContest[]
 }
 
+type DashboardMarket = {
+  realm: RealmId
+  latest: IndexPoint
+  dailyChange: number
+  periodChange: number
+  series: MiniPoint[]
+}
+
+type MiniPoint = {
+  date: string
+  value: number
+}
+
+type DashboardTarget =
+  | {
+      kind: 'index'
+      realm: RealmId
+      indexCode: IndexCode
+    }
+  | {
+      kind: 'resource'
+      realm: RealmId
+      resourceId: number
+      resourceName: string
+      quality: number
+    }
+
+type DashboardSignal = {
+  title: string
+  name: string
+  realm: RealmId
+  detail: string
+  tone: 'positive' | 'negative' | 'neutral'
+  series: MiniPoint[]
+  target?: DashboardTarget
+}
+
 type ResourceOption = {
   resource_id: number
   name: string
@@ -172,8 +210,15 @@ type ComparisonPreset = ComparisonState & {
   name: string
 }
 
+type ChartFilters = {
+  showPhases: boolean
+  showEvents: boolean
+  showContests: boolean
+}
+
 const comparisonStateKey = 'simco-comparison-state'
 const comparisonPresetsKey = 'simco-comparison-presets'
+const chartFiltersKey = 'simco-chart-filters'
 
 const realms: Record<RealmId, string> = {
   0: 'Magnates',
@@ -593,6 +638,236 @@ async function loadResourceOptions(realm: RealmId) {
   return data as ResourceOption[]
 }
 
+function speedModifierDirection(speedModifier: number) {
+  if (speedModifier < 0) {
+    return 'Expected direction: price pressure up and traded volume likely down while production slows.'
+  }
+
+  if (speedModifier > 0) {
+    return 'Expected direction: price pressure down and traded volume likely up while production speeds up.'
+  }
+
+  return 'Expected direction: neutral unless demand shifts elsewhere.'
+}
+
+function movementStoryScore(change: number, marketValue: number, volume: number, medianMarketValue: number, medianVolume: number) {
+  const marketWeight = Math.log1p(marketValue / Math.max(medianMarketValue, 1))
+  const volumeWeight = Math.log1p(volume / Math.max(medianVolume, 1))
+  return Math.abs(change) * (1 + marketWeight + volumeWeight * 0.7)
+}
+
+function median(values: number[]) {
+  const sorted = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b)
+  if (!sorted.length) return 1
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
+}
+
+async function loadResourceMiniSeries(
+  realm: RealmId,
+  resourceId: number,
+  preferredQuality?: number,
+): Promise<{ quality: number; series: MiniPoint[] } | null> {
+  const supabase = getSupabase()
+  if (!supabase) {
+    return null
+  }
+
+  const query = supabase
+    .from('market_daily')
+    .select('date,quality,vwap,market_value')
+    .eq('realm_id', realm)
+    .eq('resource_id', resourceId)
+    .order('date', { ascending: false })
+    .limit(900)
+
+  if (typeof preferredQuality === 'number') {
+    query.eq('quality', preferredQuality)
+  }
+
+  const { data, error } = await query
+  if (error || !data?.length) {
+    return null
+  }
+
+  const rows = data as Array<{ date: string; quality: number; vwap: number; market_value: number }>
+  const selectedQuality =
+    preferredQuality ??
+    rows
+      .filter((row) => row.date === rows[0].date)
+      .sort((a, b) => b.market_value - a.market_value)[0]?.quality ??
+    0
+  const series = rows
+    .filter((row) => row.quality === selectedQuality)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-30)
+    .map((row) => ({ date: row.date, value: row.vwap }))
+
+  return series.length ? { quality: selectedQuality, series } : null
+}
+
+async function loadResourceSignal(realm: RealmId): Promise<DashboardSignal | null> {
+  const supabase = getSupabase()
+  if (!supabase) {
+    return null
+  }
+
+  const { data, error } = await supabase
+    .from('market_daily')
+    .select('date,resource_id,resource_name,quality,vwap,volume,market_value')
+    .eq('realm_id', realm)
+    .order('date', { ascending: false })
+    .limit(3200)
+
+  if (error || !data?.length) {
+    return null
+  }
+
+  const rows = data as Array<{
+    date: string
+    resource_id: number
+    resource_name: string
+    quality: number
+    vwap: number
+    volume: number
+    market_value: number
+  }>
+  const dates = Array.from(new Set(rows.map((row) => row.date))).sort().slice(-2)
+  const [previousDate, latestDate] = dates
+  if (!previousDate || !latestDate) {
+    return null
+  }
+
+  const previousByKey = new Map(
+    rows
+      .filter((row) => row.date === previousDate)
+      .map((row) => [`${row.resource_id}:${row.quality}`, row]),
+  )
+
+  const latestRows = rows.filter((row) => row.date === latestDate)
+  const medianMarketValue = median(latestRows.map((row) => row.market_value))
+  const medianVolume = median(latestRows.map((row) => row.volume))
+
+  const moves = latestRows
+    .map((row) => {
+      const previous = previousByKey.get(`${row.resource_id}:${row.quality}`)
+      const change = previous?.vwap ? row.vwap / previous.vwap - 1 : 0
+      const score = movementStoryScore(change, row.market_value, row.volume, medianMarketValue, medianVolume)
+      return { row, change, score }
+    })
+    .filter((move) => Number.isFinite(move.change) && move.change !== 0)
+    .sort((a, b) => b.score - a.score)
+
+  const top = moves[0]
+  if (!top) {
+    return null
+  }
+
+  const direction = top.change >= 0 ? 'surged' : 'dropped'
+  const series = rows
+    .filter((row) => row.resource_id === top.row.resource_id && row.quality === top.row.quality)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-30)
+    .map((row) => ({ date: row.date, value: row.vwap }))
+
+  return {
+    title: top.change >= 0 ? 'Major Surge' : 'Massive Drop',
+    name: `${top.row.resource_name} Q${top.row.quality}`,
+    realm,
+    detail: `${top.row.resource_name} ${direction} ${Math.abs(top.change * 100).toFixed(1)}% on the latest snapshot, with ${formatCompact(top.row.volume)} volume traded and ${formatCompact(top.row.market_value)} in VWAP-volume market value.`,
+    tone: top.change >= 0 ? 'positive' : 'negative',
+    series,
+    target: {
+      kind: 'resource',
+      realm,
+      resourceId: top.row.resource_id,
+      resourceName: top.row.resource_name,
+      quality: top.row.quality,
+    },
+  }
+}
+
+async function loadDashboard() {
+  const marketSeries = await Promise.all(
+    ([0, 1] as RealmId[]).map(async (realmId) => {
+      const rows = await loadIndexSeries(realmId, 'total_market')
+      if (!rows?.length) return null
+      const latest = rows.at(-1)!
+      const previous = rows.at(-2) ?? latest
+      const first = rows[0] ?? latest
+      return {
+        realm: realmId,
+        latest,
+        dailyChange: previous.value ? latest.value / previous.value - 1 : 0,
+        periodChange: first.value ? latest.value / first.value - 1 : 0,
+        series: rows.slice(-30).map((row) => ({ date: row.date, value: row.value })),
+      }
+    }),
+  )
+
+  const resourceSignals = await Promise.all(([0, 1] as RealmId[]).map(loadResourceSignal))
+  const context = await loadChartContext([0, 1], demoSeries[0].date, new Date().toISOString().slice(0, 10))
+  const activeEvents = context.events
+    .filter((event) => event.until >= new Date().toISOString())
+    .sort((a, b) => Math.abs(b.speed_modifier) - Math.abs(a.speed_modifier))
+  const activeContests = context.contests
+    .filter((contest) => contest.end_at >= new Date().toISOString())
+    .sort((a, b) => b.start_at.localeCompare(a.start_at))
+
+  const watchEvent = activeEvents[0]
+  const watchContest = activeContests[0]
+  const watchEventMini = watchEvent
+    ? await loadResourceMiniSeries(watchEvent.realm_id, watchEvent.resource_id)
+    : null
+  const watchContestMini = watchContest?.resource_id
+    ? await loadResourceMiniSeries(watchContest.realm_id, watchContest.resource_id)
+    : null
+  const watchSignal: DashboardSignal | null = watchEvent
+    ? {
+        title: watchEvent.speed_modifier < 0 ? 'Supply Pressure' : 'Production Boost',
+        name: watchEvent.resource_name,
+        realm: watchEvent.realm_id,
+        detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}`,
+        tone: watchEvent.speed_modifier >= 0 ? 'positive' : 'negative',
+        series: watchEventMini?.series ?? [],
+        target: {
+          kind: 'resource',
+          realm: watchEvent.realm_id,
+          resourceId: watchEvent.resource_id,
+          resourceName: watchEvent.resource_name,
+          quality: watchEventMini?.quality ?? 0,
+        },
+      }
+    : watchContest
+      ? {
+          title: 'Contest Watch',
+          name: watchContest.resource_name ?? watchContest.name,
+          realm: watchContest.realm_id,
+          detail: `${watchContest.name} is active in ${realms[watchContest.realm_id]}, affecting ${watchContest.resource_name ?? 'a contest target'}. Contest demand may push attention and liquidity toward the target while it is active.`,
+          tone: 'neutral',
+          series: watchContestMini?.series ?? [],
+          target: watchContest.resource_id && watchContest.resource_name
+            ? {
+                kind: 'resource',
+                realm: watchContest.realm_id,
+                resourceId: watchContest.resource_id,
+                resourceName: watchContest.resource_name,
+                quality: watchContestMini?.quality ?? 0,
+              }
+            : undefined,
+        }
+      : null
+
+  return {
+    markets: marketSeries.filter(Boolean) as DashboardMarket[],
+    signals: [resourceSignals.filter(Boolean).sort((a, b) => {
+      const aMagnitude = Number(a?.detail.match(/([\d.]+)%/)?.[1] ?? 0)
+      const bMagnitude = Number(b?.detail.match(/([\d.]+)%/)?.[1] ?? 0)
+      return bMagnitude - aMagnitude
+    })[0], watchSignal].filter(Boolean) as DashboardSignal[],
+  }
+}
+
 async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSelection) {
   if (selection.kind !== 'resource') {
     return []
@@ -727,71 +1002,266 @@ function contextForSelections(context: ChartContext, selections: ComparisonSelec
 function recentContests(contests: RealmContest[]) {
   return [...contests]
     .sort((a, b) => b.start_at.localeCompare(a.start_at))
-    .slice(0, 4)
+    .slice(0, 1)
+}
+
+function eventLabel(events: RealmEvent[]) {
+  if (events.length === 1) {
+    const event = events[0]
+    return `${event.resource_name} ${event.speed_modifier > 0 ? '+' : ''}${event.speed_modifier}%`
+  }
+
+  return 'Speed modifiers'
+}
+
+function groupedEvents(events: RealmEvent[]) {
+  const groups = new Map<string, RealmEvent[]>()
+
+  for (const event of events) {
+    const key = `${event.realm_id}-${toDateOnly(event.since)}-${toDateOnly(event.until)}`
+    groups.set(key, [...(groups.get(key) ?? []), event])
+  }
+
+  return Array.from(groups.values())
+}
+
+function contextItemsForDate(context: ChartContext, date: string) {
+  const at = `${date}T12:00:00Z`
+  const events = context.events.filter((event) => event.since <= at && event.until >= at)
+  const contests = context.contests.filter((contest) => contest.start_at <= at && contest.end_at >= at)
+
+  return { events, contests }
+}
+
+function hasMultipleRealms(context: ChartContext) {
+  const realmIds = new Set([
+    ...context.phases.map((phase) => phase.realm_id),
+    ...context.events.map((event) => event.realm_id),
+    ...context.contests.map((contest) => contest.realm_id),
+  ])
+  return realmIds.size > 1
+}
+
+function phaseFill(phase: PhaseRange) {
+  if (phase.phase === 'boom') {
+    return phase.realm_id === 1 ? 'var(--phase-boom-alt)' : 'var(--phase-boom)'
+  }
+  return phase.realm_id === 1 ? 'var(--phase-recession-alt)' : 'var(--phase-recession)'
+}
+
+function eventLineColor(events: RealmEvent[]) {
+  const positive = events.reduce((sum, event) => sum + event.speed_modifier, 0) >= 0
+  const realmId = events[0]?.realm_id ?? 0
+  if (positive) return realmId === 1 ? 'var(--event-positive-line-alt)' : 'var(--event-positive-line)'
+  return realmId === 1 ? 'var(--event-negative-line-alt)' : 'var(--event-negative-line)'
+}
+
+function contestLineColor(contest: RealmContest) {
+  return contest.realm_id === 1 ? 'var(--contest-border-alt)' : 'var(--contest-border)'
+}
+
+function topOverlayDy(row: number) {
+  return 12 + row * 14
+}
+
+function bottomOverlayDy(row: number) {
+  return -8 - row * 14
 }
 
 function renderContextOverlays(
   context: ChartContext,
   showPhases: boolean,
   showEvents: boolean,
+  showContests: boolean,
   keyPrefix: string,
 ) {
   const contests = recentContests(context.contests)
+  const eventGroups = groupedEvents(context.events)
+  const multiRealm = hasMultipleRealms(context)
 
   return (
     <>
       {showPhases &&
         context.phases
           .filter((phase) => phase.phase !== 'normal')
-          .map((phase) => (
+          .map((phase, index) => (
             <ReferenceArea
-              fill={phase.phase === 'boom' ? 'var(--phase-boom)' : 'var(--phase-recession)'}
+              fill={phaseFill(phase)}
               fillOpacity={1}
               ifOverflow="visible"
               key={`${keyPrefix}-phase-${phase.realm_id}-${phase.start_at}`}
+              label={
+                multiRealm
+                  ? {
+                      value: `${realms[phase.realm_id]} ${phase.phase}`,
+                      fill: 'var(--muted)',
+                      fontSize: 11,
+                      dy: topOverlayDy(index % 2),
+                      position: 'insideTop',
+                    }
+                  : undefined
+              }
               strokeOpacity={0}
               x1={toDateOnly(phase.start_at)}
               x2={toDateOnly(phase.end_at)}
             />
           ))}
       {showEvents &&
-        context.events.map((event) => (
-          <ReferenceArea
-            fill={event.speed_modifier >= 0 ? 'var(--event-positive)' : 'var(--event-negative)'}
-            fillOpacity={1}
-            ifOverflow="visible"
-            key={`${keyPrefix}-event-${event.realm_id}-${event.event_id}`}
-            label={{
-              value: `${event.resource_name} ${event.speed_modifier > 0 ? '+' : ''}${event.speed_modifier}%`,
-              fill: 'var(--muted)',
-              fontSize: 11,
-              position: 'insideTop',
-            }}
-            strokeOpacity={0}
-            x1={toDateOnly(event.since)}
-            x2={toDateOnly(event.until)}
-          />
-        ))}
-      {showEvents &&
-        contests.map((contest) => (
-          <ReferenceArea
-            fill="var(--contest-band)"
-            fillOpacity={1}
-            ifOverflow="visible"
-            key={`${keyPrefix}-contest-${contest.realm_id}-${contest.contest_id}`}
-            label={{
-              value: contest.name,
-              fill: 'var(--heading)',
-              fontSize: 11,
-              position: 'insideBottom',
-            }}
-            stroke="var(--contest-border)"
-            strokeOpacity={0.4}
-            x1={toDateOnly(contest.start_at)}
-            x2={toDateOnly(contest.end_at)}
-          />
+        eventGroups.flatMap((events, index) => {
+          const first = events[0]
+          const label = `${multiRealm ? `${realms[first.realm_id]}: ` : ''}${eventLabel(events)}`
+          const color = eventLineColor(events)
+          const labelRow = 2 + (index % 4)
+
+          return [
+            <ReferenceLine
+              ifOverflow="visible"
+              key={`${keyPrefix}-event-start-${first.realm_id}-${first.since}-${first.until}`}
+              label={{
+                value: label,
+                fill: color,
+                fontSize: 11,
+                dy: topOverlayDy(labelRow),
+                position: 'insideTopLeft',
+              }}
+              stroke={color}
+              strokeDasharray="4 4"
+              x={toDateOnly(first.since)}
+            />,
+            <ReferenceLine
+              ifOverflow="visible"
+              key={`${keyPrefix}-event-end-${first.realm_id}-${first.since}-${first.until}`}
+              stroke={color}
+              strokeDasharray="4 4"
+              x={toDateOnly(first.until)}
+            />,
+          ]
+        })}
+      {showContests &&
+        contests.flatMap((contest, index) => (
+          [
+            <ReferenceLine
+              ifOverflow="visible"
+              key={`${keyPrefix}-contest-start-${contest.realm_id}-${contest.contest_id}`}
+              label={{
+                value: `${multiRealm ? `${realms[contest.realm_id]}: ` : ''}${contest.name}`,
+                fill: contestLineColor(contest),
+                fontSize: 11,
+                dy: bottomOverlayDy(index),
+                position: 'insideBottomLeft',
+              }}
+              stroke={contestLineColor(contest)}
+              strokeDasharray="4 4"
+              x={toDateOnly(contest.start_at)}
+            />,
+            <ReferenceLine
+              ifOverflow="visible"
+              key={`${keyPrefix}-contest-end-${contest.realm_id}-${contest.contest_id}`}
+              stroke={contestLineColor(contest)}
+              strokeDasharray="4 4"
+              x={toDateOnly(contest.end_at)}
+            />,
+          ]
         ))}
     </>
+  )
+}
+
+function ChartTooltip({
+  active,
+  payload,
+  label,
+  context,
+  valueLabel,
+}: {
+  active?: boolean
+  payload?: ReadonlyArray<any>
+  label?: string | number
+  context: ChartContext
+  valueLabel: string
+}) {
+  if (!active || !payload?.length || !label) {
+    return null
+  }
+
+  const dateLabel = String(label)
+  const { events, contests } = contextItemsForDate(context, dateLabel)
+  const eventsByRealm = ([0, 1] as RealmId[])
+    .map((realmId) => ({
+      realmId,
+      events: events.filter((event) => event.realm_id === realmId),
+    }))
+    .filter((group) => group.events.length > 0)
+  const contestsByRealm = ([0, 1] as RealmId[])
+    .map((realmId) => ({
+      realmId,
+      contests: contests.filter((contest) => contest.realm_id === realmId),
+    }))
+    .filter((group) => group.contests.length > 0)
+
+  return (
+    <div className="chart-tooltip">
+      <strong>{formatDisplayDate(dateLabel)}</strong>
+      {payload.map((item) => (
+        <span key={`${item.name}-${item.value}`}>
+          <i style={{ background: item.color }} />
+          {String(item.name ?? valueLabel)}: {formatNumber(Number(item.value))}
+        </span>
+      ))}
+      {eventsByRealm.length > 0 && (
+        <div className="tooltip-context">
+          <b>Speed modifiers</b>
+          {eventsByRealm.map((group) => (
+            <div className="tooltip-realm-group" key={`events-${group.realmId}`}>
+              <em>{realms[group.realmId]}</em>
+              {group.events.slice(0, 5).map((event) => (
+                <small key={event.event_id}>
+                  {event.resource_name}: {event.speed_modifier > 0 ? '+' : ''}
+                  {event.speed_modifier}%
+                </small>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {contestsByRealm.length > 0 && (
+        <div className="tooltip-context">
+          <b>Contests</b>
+          {contestsByRealm.map((group) => (
+            <div className="tooltip-realm-group" key={`contests-${group.realmId}`}>
+              <em>{realms[group.realmId]}</em>
+              {group.contests.slice(0, 2).map((contest) => (
+                <small key={contest.contest_id}>{contest.name}</small>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MiniChart({ data, tone = 'neutral' }: { data: MiniPoint[]; tone?: DashboardSignal['tone'] }) {
+  if (data.length < 2) {
+    return <div className="mini-chart empty">No trend yet</div>
+  }
+
+  return (
+    <div className={`mini-chart ${tone}`} aria-hidden="true">
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsLineChart data={data}>
+          <Line
+            dataKey="value"
+            dot={false}
+            isAnimationActive={false}
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeWidth={2.4}
+            type="monotone"
+          />
+        </RechartsLineChart>
+      </ResponsiveContainer>
+    </div>
   )
 }
 
@@ -800,7 +1270,11 @@ function App() {
     () => readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
     [],
   )
-  const [activeView, setActiveView] = useState<AppView>('overview')
+  const storedChartFilters = useMemo(
+    () => readJsonStorage<Partial<ChartFilters>>(chartFiltersKey, {}),
+    [],
+  )
+  const [activeView, setActiveView] = useState<AppView>('dashboard')
   const [realm, setRealm] = useState<RealmId>(0)
   const [selectedIndex, setSelectedIndex] = useState<IndexCode>('total_market')
   const [q0IncludesResearch, setQ0IncludesResearch] = useState(false)
@@ -813,6 +1287,9 @@ function App() {
   const [components, setComponents] = useState<ComponentRow[]>(demoComponents)
   const [usingDemoData, setUsingDemoData] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
+  const [dashboardMarkets, setDashboardMarkets] = useState<DashboardMarket[]>([])
+  const [dashboardSignals, setDashboardSignals] = useState<DashboardSignal[]>([])
+  const [isDashboardLoading, setIsDashboardLoading] = useState(false)
   const [resourceOptions, setResourceOptions] = useState<ResourceOption[]>([])
   const [comparisonKind, setComparisonKind] = useState<ComparisonKind>(
     storedComparisonState.kind === 'resource' ? 'resource' : 'index',
@@ -838,8 +1315,9 @@ function App() {
     readJsonStorage<ComparisonPreset[]>(comparisonPresetsKey, []),
   )
   const [isComparisonLoading, setIsComparisonLoading] = useState(false)
-  const [showPhases, setShowPhases] = useState(false)
-  const [showEvents, setShowEvents] = useState(false)
+  const [showPhases, setShowPhases] = useState(Boolean(storedChartFilters.showPhases))
+  const [showEvents, setShowEvents] = useState(Boolean(storedChartFilters.showEvents))
+  const [showContests, setShowContests] = useState(Boolean(storedChartFilters.showContests))
   const [overviewContext, setOverviewContext] = useState<ChartContext>({
     phases: [],
     events: [],
@@ -936,6 +1414,34 @@ function App() {
   useEffect(() => {
     localStorage.setItem(comparisonPresetsKey, JSON.stringify(comparisonPresets))
   }, [comparisonPresets])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function refreshDashboard() {
+      setIsDashboardLoading(true)
+      const data = await loadDashboard()
+      if (!isCurrent) return
+      setDashboardMarkets(data.markets)
+      setDashboardSignals(data.signals)
+      setIsDashboardLoading(false)
+    }
+
+    refreshDashboard()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const filters: ChartFilters = {
+      showPhases,
+      showEvents,
+      showContests,
+    }
+    localStorage.setItem(chartFiltersKey, JSON.stringify(filters))
+  }, [showPhases, showEvents, showContests])
 
   useEffect(() => {
     let isCurrent = true
@@ -1184,6 +1690,34 @@ function App() {
     setComparisonPresets((current) => current.filter((preset) => preset.id !== id))
   }
 
+  function goToDashboardTarget(target: DashboardTarget) {
+    if (target.kind === 'index') {
+      setRealm(target.realm)
+      setSelectedIndex(target.indexCode)
+      setActiveView('overview')
+      return
+    }
+
+    const selection: ResourceComparisonSelection = {
+      key: `r${target.realm}r${target.resourceId}q${target.quality}`,
+      kind: 'resource',
+      realm: target.realm,
+      resourceId: target.resourceId,
+      resourceName: target.resourceName,
+      quality: target.quality,
+    }
+
+    setSelectedComparisonRealm(target.realm)
+    setComparisonKind('resource')
+    setSelectedResourceId(target.resourceId.toString())
+    setSelectedQuality(target.quality)
+    setComparisonSelections((current) => [
+      selection,
+      ...current.filter((item) => item.key !== selection.key),
+    ].slice(0, 6))
+    setActiveView('compare')
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -1244,9 +1778,24 @@ function App() {
         >
           Show Events
         </button>
+        <button
+          className={showContests ? 'active' : ''}
+          onClick={() => setShowContests((current) => !current)}
+          type="button"
+        >
+          Show Contests
+        </button>
       </section>
 
-      <nav className="view-tabs" aria-label="Views">
+      <nav className={`view-tabs ${activeView}`} aria-label="Views">
+        <button
+          className={activeView === 'dashboard' ? 'active' : ''}
+          onClick={() => setActiveView('dashboard')}
+          type="button"
+        >
+          <Activity size={16} />
+          Dashboard
+        </button>
         <button
           className={activeView === 'overview' ? 'active' : ''}
           onClick={() => setActiveView('overview')}
@@ -1265,8 +1814,90 @@ function App() {
         </button>
       </nav>
 
+      {activeView === 'dashboard' && (
+        <section className="clean-dashboard view-panel">
+          <div className="dashboard-hero">
+            <div>
+              <p className="eyebrow">Daily Brief</p>
+              <h2>Overall Market</h2>
+            </div>
+            <span className="loading-state">
+              <RefreshCw className={isDashboardLoading ? 'spin' : ''} size={15} />
+              {isDashboardLoading ? 'Refreshing' : 'Ready'}
+            </span>
+          </div>
+
+          <div className="market-summary-grid">
+            {dashboardMarkets.map((market) => (
+              <article className="market-summary-card" key={market.realm}>
+                <div className="dashboard-card-main">
+                  <span>{realms[market.realm]}</span>
+                  <strong>{formatNumber(market.latest.value)}</strong>
+                  <small className={market.dailyChange >= 0 ? 'positive' : 'negative'}>
+                    {market.dailyChange >= 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}
+                    {formatPercent(market.dailyChange)} today
+                  </small>
+                  <small className={market.periodChange >= 0 ? 'positive' : 'negative'}>
+                    {formatPercent(market.periodChange)} over visible history
+                  </small>
+                </div>
+                <div className="dashboard-card-side">
+                  <MiniChart data={market.series} tone={market.dailyChange >= 0 ? 'positive' : 'negative'} />
+                  <button
+                    className="go-to-button"
+                    onClick={() => goToDashboardTarget({
+                      kind: 'index',
+                      realm: market.realm,
+                      indexCode: 'total_market',
+                    })}
+                    type="button"
+                  >
+                    <ArrowUpRight size={15} />
+                    Go To
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="signal-grid">
+            {(dashboardSignals.length ? dashboardSignals : [
+              {
+                title: 'Resource of the Day',
+                name: 'Waiting for data',
+                realm: 0 as RealmId,
+                detail: 'The dashboard will highlight market moves after the latest database snapshot loads.',
+                tone: 'neutral' as const,
+                series: [],
+              },
+            ]).map((signal, index) => (
+              <article className={`signal-card ${signal.tone}`} key={`${signal.title}-${signal.name}-${index}`}>
+                <div className="dashboard-card-main">
+                  <p className="eyebrow">{realms[signal.realm]}</p>
+                  <h2>{signal.title}</h2>
+                  <strong>{signal.name}</strong>
+                  <p>{signal.detail}</p>
+                </div>
+                <div className="dashboard-card-side">
+                  <MiniChart data={signal.series} tone={signal.tone} />
+                  <button
+                    className="go-to-button"
+                    disabled={!signal.target}
+                    onClick={() => signal.target && goToDashboardTarget(signal.target)}
+                    type="button"
+                  >
+                    <ArrowUpRight size={15} />
+                    Go To
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       {activeView === 'overview' ? (
-        <>
+        <section className="overview-view view-panel">
           <section className="index-grid" aria-label="Indices">
             {indexDefinitions.map((item) => (
               <button
@@ -1375,10 +2006,15 @@ function App() {
                       width={72}
                     />
                     <Tooltip
-                      formatter={(value) => [formatNumber(Number(value)), 'Index']}
-                      labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''}
+                      content={(props) => (
+                        <ChartTooltip
+                          {...props}
+                          context={overviewContext}
+                          valueLabel="Index"
+                        />
+                      )}
                     />
-                    {renderContextOverlays(overviewContext, showPhases, showEvents, 'overview')}
+                    {renderContextOverlays(overviewContext, showPhases, showEvents, showContests, 'overview')}
                     <Area
                       dataKey="value"
                       type="monotone"
@@ -1459,9 +2095,9 @@ function App() {
               </table>
             </div>
           </section>
-        </>
-      ) : (
-        <section className="comparison-panel">
+        </section>
+      ) : activeView === 'compare' ? (
+        <section className="comparison-panel view-panel">
           <div className="panel-header comparison-heading">
             <div>
               <p className="eyebrow">Comparisons</p>
@@ -1668,15 +2304,21 @@ function App() {
                   width={72}
                 />
                 <Tooltip
-                  formatter={(value, name) => [
-                    compareMode === 'percent'
-                      ? `${Number(value).toFixed(2)}%`
-                      : formatNumber(Number(value)),
-                    name,
-                  ]}
-                  labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''}
+                  content={(props) => (
+                    <ChartTooltip
+                      {...props}
+                      context={filteredComparisonContext}
+                      valueLabel={compareMode === 'percent' ? 'Change' : 'Value'}
+                    />
+                  )}
                 />
-                {renderContextOverlays(filteredComparisonContext, showPhases, showEvents, 'comparison')}
+                {renderContextOverlays(
+                  filteredComparisonContext,
+                  showPhases,
+                  showEvents,
+                  showContests,
+                  'comparison',
+                )}
                 <Legend />
                 {(comparisonSelections.length
                   ? comparisonSelections
@@ -1717,7 +2359,13 @@ function App() {
             </ResponsiveContainer>
           </div>
         </section>
-      )}
+      ) : null}
+
+      <footer className="site-footer">
+        <span>&copy; {new Date().getFullYear()} SimCompanies Market Indices.</span>
+        <span>Unofficial fan-made tool. Not affiliated with SimCompanies or Simcotools.</span>
+        <span>Market data sourced from Simcotools.</span>
+      </footer>
     </main>
   )
 }
