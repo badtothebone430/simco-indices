@@ -74,6 +74,23 @@
   border-radius: 6px;
 }
 
+.update-note {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.update-note strong {
+  color: var(--heading);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-note small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

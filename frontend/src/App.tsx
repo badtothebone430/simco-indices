@@ -266,6 +266,29 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(2)}%`
 }
 
+function nextUpdateDate(now = new Date()) {
+  const next = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 1, 30, 0),
+  )
+
+  if (next <= now) {
+    next.setUTCDate(next.getUTCDate() + 1)
+  }
+
+  return next
+}
+
+function formatCountdown(target: Date, now = new Date()) {
+  const totalSeconds = Math.max(0, Math.floor((target.getTime() - now.getTime()) / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
+    .toString()
+    .padStart(2, '0')}`
+}
+
 function timeframeDays(timeframe: Timeframe) {
   if (timeframe === '7d') return 7
   if (timeframe === '30d') return 30
@@ -424,6 +447,8 @@ function App() {
   const [compareTimeframe, setCompareTimeframe] = useState<Timeframe>('30d')
   const [comparisonHeight, setComparisonHeight] = useState(460)
   const [isComparisonLoading, setIsComparisonLoading] = useState(false)
+  const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
+  const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
 
   const qualityDefinitions = qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch))
   const activeDefinition =
@@ -451,6 +476,18 @@ function App() {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('simco-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    function refreshCountdown() {
+      const next = nextUpdateDate()
+      setNextUpdate(next)
+      setUpdateCountdown(formatCountdown(next))
+    }
+
+    refreshCountdown()
+    const interval = window.setInterval(refreshCountdown, 1000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     let isCurrent = true
@@ -617,7 +654,9 @@ function App() {
         </div>
         <div className="update-note">
           <CalendarClock size={16} />
-          Daily snapshot after prior-day VWAPs settle
+          <span>Next update in</span>
+          <strong>{updateCountdown}</strong>
+          <small>{nextUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
         </div>
       </section>
 
