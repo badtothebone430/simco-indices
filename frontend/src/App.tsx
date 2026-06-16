@@ -338,6 +338,23 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(2)}%`
 }
 
+function ordinalSuffix(day: number) {
+  if (day >= 11 && day <= 13) return 'th'
+  const lastDigit = day % 10
+  if (lastDigit === 1) return 'st'
+  if (lastDigit === 2) return 'nd'
+  if (lastDigit === 3) return 'rd'
+  return 'th'
+}
+
+function formatDisplayDate(date: string) {
+  const parsed = new Date(`${date}T00:00:00Z`)
+  const day = parsed.getUTCDate()
+  const month = parsed.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })
+  const year = parsed.getUTCFullYear()
+  return `${day}${ordinalSuffix(day)} ${month}, ${year}`
+}
+
 function nextUpdateDate(now = new Date()) {
   const next = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 1, 30, 0),
@@ -1044,7 +1061,7 @@ function App() {
               </div>
               <div className="metric">
                 <span>Latest Date</span>
-                <strong>{latest.date}</strong>
+                <strong>{formatDisplayDate(latest.date)}</strong>
               </div>
               <div className="data-source">
                 <Database size={17} />
