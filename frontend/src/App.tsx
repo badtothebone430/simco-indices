@@ -26,6 +26,7 @@ import {
   Legend,
   Line,
   LineChart as RechartsLineChart,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -67,6 +68,40 @@ type ComponentRow = {
   vwap: number
   volume: number
   market_value: number
+}
+
+type PhaseRange = {
+  realm_id: RealmId
+  phase: 'boom' | 'normal' | 'recession' | string
+  start_at: string
+  end_at: string
+}
+
+type RealmEvent = {
+  realm_id: RealmId
+  event_id: number
+  resource_id: number
+  resource_name: string
+  speed_modifier: number
+  since: string
+  until: string
+  produced_at_name: string | null
+}
+
+type RealmContest = {
+  realm_id: RealmId
+  contest_id: number
+  name: string
+  resource_id: number | null
+  resource_name: string | null
+  start_at: string
+  end_at: string
+}
+
+type ChartContext = {
+  phases: PhaseRange[]
+  events: RealmEvent[]
+  contests: RealmContest[]
 }
 
 type ResourceOption = {
@@ -182,6 +217,54 @@ const indexDefinitions: IndexDefinition[] = [
     name: 'Construction',
     description: 'Construction-chain resources weighted by daily market activity.',
     method: 'Sector',
+  },
+  {
+    code: 'agriculture_only',
+    name: 'Agriculture',
+    description: 'Agriculture resources weighted by daily market activity.',
+    method: 'Category',
+  },
+  {
+    code: 'fashion_only',
+    name: 'Fashion',
+    description: 'Fashion resources weighted by daily market activity.',
+    method: 'Category',
+  },
+  {
+    code: 'energy_only',
+    name: 'Energy',
+    description: 'Energy resources weighted by daily market activity.',
+    method: 'Category',
+  },
+  {
+    code: 'electronics_only',
+    name: 'Electronics',
+    description: 'Electronics resources weighted by daily market activity.',
+    method: 'Category',
+  },
+  {
+    code: 'automotive_only',
+    name: 'Automotive',
+    description: 'Automotive resources weighted by daily market activity.',
+    method: 'Category',
+  },
+  {
+    code: 'aerospace_only',
+    name: 'Aerospace',
+    description: 'Aerospace resources weighted by daily market activity.',
+    method: 'Category',
+  },
+  {
+    code: 'resources_only',
+    name: 'Resources',
+    description: 'Raw and industrial resource inputs weighted by daily market activity.',
+    method: 'Category',
+  },
+  {
+    code: 'seasonal_only',
+    name: 'Seasonal',
+    description: 'Seasonal resources weighted by daily market activity.',
+    method: 'Category',
   },
   {
     code: 'equal_weight_market',
@@ -355,6 +438,10 @@ function formatDisplayDate(date: string) {
   return `${day}${ordinalSuffix(day)} ${month}, ${year}`
 }
 
+function toDateOnly(value: string) {
+  return value.slice(0, 10)
+}
+
 function nextUpdateDate(now = new Date()) {
   const next = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 1, 30, 0),
@@ -442,6 +529,41 @@ async function loadIndexComponents(realm: RealmId, indexCode: IndexCode, date: s
   }
 
   return data as ComponentRow[]
+}
+
+async function loadChartContext(realmIds: RealmId[], startDate: string, endDate: string) {
+  const supabase = getSupabase()
+  if (!supabase || !realmIds.length || !startDate || !endDate) {
+    return { phases: [], events: [], contests: [] }
+  }
+
+  const [phases, events, contests] = await Promise.all([
+    supabase
+      .from('realm_phases')
+      .select('realm_id,phase,start_at,end_at')
+      .in('realm_id', realmIds)
+      .lte('start_at', `${endDate}T23:59:59Z`)
+      .gte('end_at', `${startDate}T00:00:00Z`),
+    supabase
+      .from('realm_events')
+      .select('realm_id,event_id,resource_id,resource_name,speed_modifier,since,until,produced_at_name')
+      .in('realm_id', realmIds)
+      .lte('since', `${endDate}T23:59:59Z`)
+      .gte('until', `${startDate}T00:00:00Z`),
+    supabase
+      .from('realm_contests')
+      .select('realm_id,contest_id,name,resource_id,resource_name,start_at,end_at')
+      .in('realm_id', realmIds)
+      .lte('start_at', `${endDate}T23:59:59Z`)
+      .gte('end_at', `${startDate}T00:00:00Z`)
+      .order('start_at', { ascending: false }),
+  ])
+
+  return {
+    phases: phases.error ? [] : (phases.data as PhaseRange[]),
+    events: events.error ? [] : (events.data as RealmEvent[]),
+    contests: contests.error ? [] : (contests.data as RealmContest[]),
+  }
 }
 
 async function loadResourceOptions(realm: RealmId) {
@@ -547,6 +669,124 @@ function comparisonDomain(rows: ComparisonDatum[], keys: string[]) {
   return [min - padding, max + padding] as const
 }
 
+function chartDateWindow(rows: { date: string }[]) {
+  const dates = rows.map((row) => row.date).filter(Boolean).sort()
+  return {
+    startDate: dates[0] ?? '',
+    endDate: dates.at(-1) ?? '',
+  }
+}
+
+function shortDateLabel(date: string) {
+  return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function contextForSelections(context: ChartContext, selections: ComparisonSelection[]) {
+  if (selections.length === 0) {
+    return context
+  }
+
+  const hasIndexByRealm = new Set(
+    selections.filter((selection) => selection.kind === 'index').map((selection) => selection.realm),
+  )
+  const resourceIdsByRealm = new Map<RealmId, Set<number>>()
+
+  for (const selection of selections) {
+    if (selection.kind === 'resource') {
+      const existing = resourceIdsByRealm.get(selection.realm) ?? new Set<number>()
+      existing.add(selection.resourceId)
+      resourceIdsByRealm.set(selection.realm, existing)
+    }
+  }
+
+  return {
+    phases: context.phases,
+    events: context.events.filter((event) => {
+      if (hasIndexByRealm.has(event.realm_id)) return true
+      return resourceIdsByRealm.get(event.realm_id)?.has(event.resource_id) ?? false
+    }),
+    contests: context.contests.filter((contest) => {
+      if (hasIndexByRealm.has(contest.realm_id)) return true
+      if (!contest.resource_id) return false
+      return resourceIdsByRealm.get(contest.realm_id)?.has(contest.resource_id) ?? false
+    }),
+  }
+}
+
+function recentContests(contests: RealmContest[]) {
+  return [...contests]
+    .sort((a, b) => b.start_at.localeCompare(a.start_at))
+    .slice(0, 4)
+}
+
+function renderContextOverlays(
+  context: ChartContext,
+  showPhases: boolean,
+  showEvents: boolean,
+  keyPrefix: string,
+) {
+  const contests = recentContests(context.contests)
+
+  return (
+    <>
+      {showPhases &&
+        context.phases
+          .filter((phase) => phase.phase !== 'normal')
+          .map((phase) => (
+            <ReferenceArea
+              fill={phase.phase === 'boom' ? 'var(--phase-boom)' : 'var(--phase-recession)'}
+              fillOpacity={1}
+              ifOverflow="visible"
+              key={`${keyPrefix}-phase-${phase.realm_id}-${phase.start_at}`}
+              strokeOpacity={0}
+              x1={toDateOnly(phase.start_at)}
+              x2={toDateOnly(phase.end_at)}
+            />
+          ))}
+      {showEvents &&
+        context.events.map((event) => (
+          <ReferenceArea
+            fill={event.speed_modifier >= 0 ? 'var(--event-positive)' : 'var(--event-negative)'}
+            fillOpacity={1}
+            ifOverflow="visible"
+            key={`${keyPrefix}-event-${event.realm_id}-${event.event_id}`}
+            label={{
+              value: `${event.resource_name} ${event.speed_modifier > 0 ? '+' : ''}${event.speed_modifier}%`,
+              fill: 'var(--muted)',
+              fontSize: 11,
+              position: 'insideTop',
+            }}
+            strokeOpacity={0}
+            x1={toDateOnly(event.since)}
+            x2={toDateOnly(event.until)}
+          />
+        ))}
+      {showEvents &&
+        contests.map((contest) => (
+          <ReferenceArea
+            fill="var(--contest-band)"
+            fillOpacity={1}
+            ifOverflow="visible"
+            key={`${keyPrefix}-contest-${contest.realm_id}-${contest.contest_id}`}
+            label={{
+              value: contest.name,
+              fill: 'var(--heading)',
+              fontSize: 11,
+              position: 'insideBottom',
+            }}
+            stroke="var(--contest-border)"
+            strokeOpacity={0.4}
+            x1={toDateOnly(contest.start_at)}
+            x2={toDateOnly(contest.end_at)}
+          />
+        ))}
+    </>
+  )
+}
+
 function App() {
   const storedComparisonState = useMemo(
     () => readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
@@ -590,6 +830,18 @@ function App() {
     readJsonStorage<ComparisonPreset[]>(comparisonPresetsKey, []),
   )
   const [isComparisonLoading, setIsComparisonLoading] = useState(false)
+  const [showPhases, setShowPhases] = useState(false)
+  const [showEvents, setShowEvents] = useState(false)
+  const [overviewContext, setOverviewContext] = useState<ChartContext>({
+    phases: [],
+    events: [],
+    contests: [],
+  })
+  const [comparisonContext, setComparisonContext] = useState<ChartContext>({
+    phases: [],
+    events: [],
+    contests: [],
+  })
   const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
 
@@ -621,6 +873,12 @@ function App() {
   const activeComparisonDomain = useMemo(
     () => comparisonDomain(comparisonSeries, activeComparisonKeys),
     [comparisonSeries, activeComparisonKeys],
+  )
+  const overviewDateWindow = useMemo(() => chartDateWindow(visibleSeries), [visibleSeries])
+  const comparisonDateWindow = useMemo(() => chartDateWindow(comparisonSeries), [comparisonSeries])
+  const filteredComparisonContext = useMemo(
+    () => contextForSelections(comparisonContext, comparisonSelections),
+    [comparisonContext, comparisonSelections],
   )
 
   useEffect(() => {
@@ -670,6 +928,23 @@ function App() {
   useEffect(() => {
     localStorage.setItem(comparisonPresetsKey, JSON.stringify(comparisonPresets))
   }, [comparisonPresets])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function refreshOverviewContext() {
+      const context = await loadChartContext([realm], overviewDateWindow.startDate, overviewDateWindow.endDate)
+      if (isCurrent) {
+        setOverviewContext(context)
+      }
+    }
+
+    refreshOverviewContext()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [realm, overviewDateWindow.startDate, overviewDateWindow.endDate])
 
   useEffect(() => {
     let isCurrent = true
@@ -781,6 +1056,36 @@ function App() {
       isCurrent = false
     }
   }, [realm, comparisonSelections, compareMetric, compareMode, compareTimeframe])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function refreshComparisonContext() {
+      const realmIds =
+        comparisonSelections.length > 0
+          ? Array.from(new Set(comparisonSelections.map((selection) => selection.realm)))
+          : [selectedComparisonRealm]
+      const context = await loadChartContext(
+        realmIds,
+        comparisonDateWindow.startDate,
+        comparisonDateWindow.endDate,
+      )
+      if (isCurrent) {
+        setComparisonContext(context)
+      }
+    }
+
+    refreshComparisonContext()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [
+    selectedComparisonRealm,
+    comparisonSelections,
+    comparisonDateWindow.startDate,
+    comparisonDateWindow.endDate,
+  ])
 
   function addComparisonSelection() {
     if (comparisonKind === 'index') {
@@ -916,6 +1221,23 @@ function App() {
         </div>
       </section>
 
+      <section className="chart-overlay-controls" aria-label="Chart overlays">
+        <button
+          className={showPhases ? 'active' : ''}
+          onClick={() => setShowPhases((current) => !current)}
+          type="button"
+        >
+          Show Phase
+        </button>
+        <button
+          className={showEvents ? 'active' : ''}
+          onClick={() => setShowEvents((current) => !current)}
+          type="button"
+        >
+          Show Events
+        </button>
+      </section>
+
       <nav className="view-tabs" aria-label="Views">
         <button
           className={activeView === 'overview' ? 'active' : ''}
@@ -954,6 +1276,7 @@ function App() {
                   {item.code === 'food_only' && <Soup size={18} />}
                   {item.code === 'construction_only' && <Hammer size={18} />}
                   {item.code === 'equal_weight_market' && <BarChart3 size={18} />}
+                  {item.method === 'Category' && <BarChart3 size={18} />}
                 </span>
                 <span>
                   <strong>{item.name}</strong>
@@ -1022,7 +1345,13 @@ function App() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
-                    <XAxis dataKey="label" minTickGap={28} tickLine={false} axisLine={false} />
+                    <XAxis
+                      dataKey="date"
+                      minTickGap={28}
+                      tickFormatter={shortDateLabel}
+                      tickLine={false}
+                      axisLine={false}
+                    />
                     <YAxis
                       domain={['dataMin - 20', 'dataMax + 20']}
                       tickFormatter={(value) => formatNumber(Number(value))}
@@ -1034,6 +1363,7 @@ function App() {
                       formatter={(value) => [formatNumber(Number(value)), 'Index']}
                       labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''}
                     />
+                    {renderContextOverlays(overviewContext, showPhases, showEvents, 'overview')}
                     <Area
                       dataKey="value"
                       type="monotone"
@@ -1306,7 +1636,13 @@ function App() {
             <ResponsiveContainer width="100%" height="100%">
               <RechartsLineChart data={comparisonSeries} margin={{ top: 12, right: 20, left: 4, bottom: 4 }}>
                 <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
-                <XAxis dataKey="label" minTickGap={24} tickLine={false} axisLine={false} />
+                <XAxis
+                  dataKey="date"
+                  minTickGap={24}
+                  tickFormatter={shortDateLabel}
+                  tickLine={false}
+                  axisLine={false}
+                />
                 <YAxis
                   domain={activeComparisonDomain}
                   tickFormatter={(value) =>
@@ -1325,6 +1661,7 @@ function App() {
                   ]}
                   labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''}
                 />
+                {renderContextOverlays(filteredComparisonContext, showPhases, showEvents, 'comparison')}
                 <Legend />
                 {(comparisonSelections.length
                   ? comparisonSelections

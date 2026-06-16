@@ -111,6 +111,30 @@
   margin-bottom: 18px;
 }
 
+.chart-overlay-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.chart-overlay-controls button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.chart-overlay-controls button.active {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
 .view-tabs {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(150px, 1fr));

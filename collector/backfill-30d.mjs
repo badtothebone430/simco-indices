@@ -57,6 +57,195 @@ const CONSTRUCTION_RESOURCE_NAMES = new Set([
   'wood',
 ])
 
+const CATEGORY_INDEXES = [
+  [
+    'agriculture_only',
+    [
+      'seeds',
+      'apples',
+      'oranges',
+      'grapes',
+      'grain',
+      'sugarcane',
+      'cotton',
+      'cows',
+      'pigs',
+      'coffee beans',
+      'cocoa',
+      'vegetables',
+      'fodder',
+    ],
+  ],
+  [
+    'food_only',
+    [
+      'dough',
+      'sauce',
+      'steak',
+      'sausages',
+      'eggs',
+      'milk',
+      'coffee powder',
+      'flour',
+      'bread',
+      'apple pie',
+      'orange juice',
+      'apple cider',
+      'ginger beer',
+      'frozen pizza',
+      'pasta',
+      'butter',
+      'cheese',
+      'chocolate',
+      'sugar',
+      'hamburger',
+      'lasagna',
+      'meat balls',
+      'cocktails',
+      'vegetable oil',
+      'salad',
+      'samosa',
+      'pumpkin soup',
+    ],
+  ],
+  [
+    'construction_only',
+    [
+      'wood',
+      'reinforced concrete',
+      'bricks',
+      'cement',
+      'clay',
+      'limestone',
+      'beams',
+      'planks',
+      'windows',
+      'tools',
+      'construction units',
+    ],
+  ],
+  [
+    'fashion_only',
+    [
+      'fabric',
+      'leather',
+      'underwear',
+      'gloves',
+      'dress',
+      'stiletto heel',
+      'handbags',
+      'sneakers',
+      'luxury watch',
+      'necklace',
+    ],
+  ],
+  ['energy_only', ['crude oil', 'petrol', 'diesel', 'power', 'ethanol', 'methane', 'rocket fuel']],
+  [
+    'electronics_only',
+    [
+      'processors',
+      'electronic components',
+      'batteries',
+      'displays',
+      'smart phones',
+      'tablets',
+      'laptops',
+      'monitors',
+      'televisions',
+      'high grade e-comps',
+      'quadcopter',
+      'robots',
+    ],
+  ],
+  [
+    'automotive_only',
+    [
+      'on-board computer',
+      'electric motor',
+      'luxury car interior',
+      'basic interior',
+      'car body',
+      'combustion engine',
+      'economy e-car',
+      'luxury e-car',
+      'economy car',
+      'luxury car',
+      'truck',
+      'bulldozer',
+    ],
+  ],
+  [
+    'aerospace_only',
+    [
+      'fuselage',
+      'wing',
+      'flight computer',
+      'cockpit',
+      'attitude control',
+      'propellant tank',
+      'solid fuel booster',
+      'rocket engine',
+      'heat shield',
+      'ion drive',
+      'jet engine',
+    ],
+  ],
+  [
+    'resources_only',
+    [
+      'water',
+      'transport',
+      'minerals',
+      'bauxite',
+      'silicon',
+      'chemicals',
+      'aluminium',
+      'plastic',
+      'iron ore',
+      'steel',
+      'sand',
+      'glass',
+      'gold ore',
+      'golden bars',
+      'carbon fibers',
+      'carbon composite',
+    ],
+  ],
+  [
+    'research_only',
+    [
+      'plant research',
+      'energy research',
+      'mining research',
+      'electronics research',
+      'breeding research',
+      'chemistry research',
+      'software',
+      'automotive research',
+      'fashion research',
+      'aerospace research',
+      'materials research',
+      'recipes',
+    ],
+  ],
+  [
+    'seasonal_only',
+    [
+      'pumpkin',
+      'xmas crackers',
+      'xmas ornament',
+      "jack o'lantern",
+      'witch costume',
+      'tree',
+      'easter bunny',
+      'ramadan sweets',
+      'chocolate icecream',
+      'apple icecream',
+      'cream egg',
+    ],
+  ],
+].map(([code, names]) => [code, new Set(names)])
+
 class SimcotoolsError extends Error {
   constructor(path, status) {
     super(`Simcotools ${path} failed with ${status}`)
@@ -105,6 +294,25 @@ async function fetchJson(path) {
   throw new SimcotoolsError(path, 0)
 }
 
+async function fetchPaged(path, key) {
+  const rows = []
+  let page = 1
+  let lastPage = 1
+
+  do {
+    const separator = path.includes('?') ? '&' : '?'
+    const data = await fetchJson(`${path}${separator}page=${page}`)
+    rows.push(...(data[key] ?? []))
+    lastPage = Number(data.metadata?.lastPage ?? page)
+    page += 1
+    if (page <= lastPage) {
+      await sleep(RATE_LIMIT_DELAY_MS)
+    }
+  } while (page <= lastPage)
+
+  return rows
+}
+
 async function fetchResources(realm) {
   const data = await fetchJson(`/v1/realms/${realm}/resources?type=all&disable_pagination=true`)
   return data.resources ?? []
@@ -119,6 +327,74 @@ async function fetchCandlesticks(realm, resourceId, quality) {
   return fetchJson(`/v1/realms/${realm}/market/resources/${resourceId}/${quality}/candlesticks`)
 }
 
+async function collectRealmContext(supabase, realm) {
+  const phases = await fetchPaged(`/v1/realms/${realm}/phases`, 'ranges')
+  await sleep(RATE_LIMIT_DELAY_MS)
+  const events = await fetchPaged(`/v1/realms/${realm}/events`, 'events')
+  await sleep(RATE_LIMIT_DELAY_MS)
+  const contests = await fetchPaged(`/v1/realms/${realm}/contests`, 'contests')
+
+  await upsertInChunks(
+    supabase,
+    'realm_phases',
+    phases.map((phase) => ({
+      realm_id: realm,
+      phase: phase.phase,
+      start_at: phase.start,
+      end_at: phase.end,
+      days: phase.days ?? null,
+      weeks: phase.weeks ?? null,
+      raw: phase,
+      updated_at: new Date().toISOString(),
+    })),
+    'realm_id,start_at,end_at',
+  )
+
+  await upsertInChunks(
+    supabase,
+    'realm_events',
+    events.map((event) => ({
+      realm_id: realm,
+      event_id: event.id,
+      resource_id: event.resource,
+      resource_name: event.resourceName ?? event.resource_name,
+      speed_modifier: event.speedModifier ?? event.speed_modifier,
+      since: event.since,
+      until: event.until,
+      produced_at: event.producedAt ?? event.produced_at ?? null,
+      produced_at_name: event.producedAtName ?? event.produced_at_name ?? null,
+      raw: event,
+      updated_at: new Date().toISOString(),
+    })),
+    'realm_id,event_id',
+  )
+
+  await upsertInChunks(
+    supabase,
+    'realm_contests',
+    contests.map((contest) => ({
+      realm_id: realm,
+      contest_id: contest.id,
+      name: contest.name,
+      resource_id: contest.resourceId ?? null,
+      resource_name: contest.resourceName ?? null,
+      building_id: contest.buildingId ?? null,
+      building_name: contest.buildingName ?? null,
+      start_at: contest.startDate,
+      end_at: contest.endDate,
+      raw: contest,
+      updated_at: new Date().toISOString(),
+    })),
+    'realm_id,contest_id',
+  )
+
+  return {
+    phases: phases.length,
+    events: events.length,
+    contests: contests.length,
+  }
+}
+
 function toDateOnly(value) {
   return value.slice(0, 10)
 }
@@ -128,11 +404,19 @@ function isResearchRow(row) {
 }
 
 function isFoodRow(row) {
-  return FOOD_RESOURCE_NAMES.has(row.resource_name.toLowerCase())
+  return CATEGORY_INDEXES.find(([code]) => code === 'food_only')?.[1].has(row.resource_name.toLowerCase()) ?? false
 }
 
 function isConstructionRow(row) {
-  return CONSTRUCTION_RESOURCE_NAMES.has(row.resource_name.toLowerCase())
+  return CATEGORY_INDEXES.find(([code]) => code === 'construction_only')?.[1].has(row.resource_name.toLowerCase()) ?? false
+}
+
+function categoryIndexSpecs(dateRows) {
+  return CATEGORY_INDEXES.map(([indexCode, names]) => [
+    indexCode,
+    dateRows.filter((row) => names.has(row.resource_name.toLowerCase())),
+    'market_value',
+  ])
 }
 
 function weightedReturn(rows, weightField) {
@@ -164,10 +448,8 @@ function indexSpecRows(dateRows) {
     ['sc_10', rankedRows.slice(0, 10), 'market_value'],
     ['sc_30', rankedRows.slice(0, 30), 'market_value'],
     ['sc_50', rankedRows.slice(0, 50), 'market_value'],
-    ['research_only', dateRows.filter(isResearchRow), 'market_value'],
-    ['food_only', dateRows.filter(isFoodRow), 'market_value'],
-    ['construction_only', dateRows.filter(isConstructionRow), 'market_value'],
     ['equal_weight_market', dateRows, 'equal'],
+    ...categoryIndexSpecs(dateRows),
     ['quality_0', dateRows.filter((row) => row.quality === 0 && !isResearchRow(row)), 'market_value'],
     ['quality_0_with_research', dateRows.filter((row) => row.quality === 0), 'market_value'],
     ...QUALITY_LEVELS.slice(1).map((quality) => [
@@ -273,6 +555,7 @@ function buildRowsFromCandles(realm, resource, quality, candlesticks) {
 }
 
 async function backfillRealm(supabase, realm) {
+  const context = await collectRealmContext(supabase, realm)
   const resources = await fetchResources(realm)
   const resourceById = new Map(resources.map((resource) => [resource.id, resource]))
   const prices = await fetchPrices(realm)
@@ -350,6 +633,7 @@ async function backfillRealm(supabase, realm) {
     marketRows: rows.length,
     indexValues: indexValues.length,
     indexComponents: indexComponents.length,
+    context,
   }
 }
 

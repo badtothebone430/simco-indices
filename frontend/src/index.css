@@ -15,6 +15,12 @@
   --hover: #f4faf8;
   --table-head: #f7faf9;
   --chart-grid: #dde5e2;
+  --phase-boom: rgba(25, 135, 84, 0.11);
+  --phase-recession: rgba(180, 35, 24, 0.11);
+  --event-positive: rgba(36, 122, 123, 0.1);
+  --event-negative: rgba(196, 122, 16, 0.11);
+  --contest-band: rgba(91, 110, 225, 0.1);
+  --contest-border: rgba(91, 110, 225, 0.45);
   --shadow-sm: 0 1px 2px rgba(22, 33, 32, 0.09);
   color: var(--text);
   background: var(--bg);
@@ -45,6 +51,12 @@
   --hover: #1e2b28;
   --table-head: #1d2926;
   --chart-grid: #2f403c;
+  --phase-boom: rgba(85, 200, 138, 0.13);
+  --phase-recession: rgba(255, 138, 122, 0.13);
+  --event-positive: rgba(85, 184, 177, 0.13);
+  --event-negative: rgba(224, 162, 59, 0.13);
+  --contest-band: rgba(142, 154, 255, 0.13);
+  --contest-border: rgba(142, 154, 255, 0.5);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   color-scheme: dark;
 }
