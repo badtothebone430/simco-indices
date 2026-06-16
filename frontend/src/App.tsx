@@ -38,6 +38,7 @@ type Theme = 'light' | 'dark'
 type AppView = 'overview' | 'compare'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
+type ComparisonKind = 'index' | 'resource'
 type Timeframe = '7d' | '30d' | '90d' | 'all'
 
 type IndexDefinition = {
@@ -78,12 +79,27 @@ type MarketPoint = {
   volume: number
 }
 
-type ComparisonSelection = {
+type ComparisonPoint = {
+  date: string
+  value: number
+}
+
+type ResourceComparisonSelection = {
   key: string
+  kind: 'resource'
   resourceId: number
   resourceName: string
   quality: number
 }
+
+type IndexComparisonSelection = {
+  key: string
+  kind: 'index'
+  indexCode: IndexCode
+  indexName: string
+}
+
+type ComparisonSelection = ResourceComparisonSelection | IndexComparisonSelection
 
 type ComparisonDatum = {
   date: string
@@ -164,6 +180,12 @@ function qualityIndexDefinition(quality: number, includeResearch: boolean): Inde
       : `Quality ${quality} resources weighted by daily market activity.`,
     method: includesResearch ? 'Quality + research' : 'Quality',
   }
+}
+
+function comparisonLabel(selection: ComparisonSelection) {
+  return selection.kind === 'index'
+    ? selection.indexName
+    : `${selection.resourceName} Q${selection.quality}`
 }
 
 const demoSeries: IndexPoint[] = Array.from({ length: 30 }, (_, index) => {
@@ -375,6 +397,10 @@ async function loadResourceOptions(realm: RealmId) {
 }
 
 async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSelection) {
+  if (selection.kind !== 'resource') {
+    return []
+  }
+
   const supabase = getSupabase()
   if (!supabase) {
     return []
@@ -395,10 +421,18 @@ async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSel
   return data as MarketPoint[]
 }
 
+async function loadIndexComparisonSeries(realm: RealmId, selection: ComparisonSelection) {
+  if (selection.kind !== 'index') {
+    return []
+  }
+
+  const rows = await loadIndexSeries(realm, selection.indexCode)
+  return rows?.map((row) => ({ date: row.date, value: row.value })) ?? []
+}
+
 function buildComparisonRows(
-  seriesByKey: Map<string, MarketPoint[]>,
+  seriesByKey: Map<string, ComparisonPoint[]>,
   selections: ComparisonSelection[],
-  metric: CompareMetric,
   mode: CompareMode,
   timeframe: Timeframe,
 ) {
@@ -406,7 +440,7 @@ function buildComparisonRows(
 
   for (const selection of selections) {
     const rows = filterByTimeframe(seriesByKey.get(selection.key) ?? [], timeframe)
-    const baseline = rows.find((row) => Number(row[metric]) > 0)?.[metric] ?? 0
+    const baseline = rows.find((row) => row.value > 0)?.value ?? 0
 
     for (const row of rows) {
       const label = new Date(`${row.date}T00:00:00Z`).toLocaleDateString('en-US', {
@@ -414,7 +448,7 @@ function buildComparisonRows(
         day: 'numeric',
       })
       const datum = dateMap.get(row.date) ?? { date: row.date, label }
-      const rawValue = Number(row[metric])
+      const rawValue = Number(row.value)
       datum[selection.key] = mode === 'percent' && baseline > 0 ? (rawValue / baseline - 1) * 100 : rawValue
       dateMap.set(row.date, datum)
     }
@@ -438,6 +472,8 @@ function App() {
   const [usingDemoData, setUsingDemoData] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [resourceOptions, setResourceOptions] = useState<ResourceOption[]>([])
+  const [comparisonKind, setComparisonKind] = useState<ComparisonKind>('index')
+  const [selectedComparisonIndex, setSelectedComparisonIndex] = useState<IndexCode>('total_market')
   const [selectedResourceId, setSelectedResourceId] = useState('')
   const [selectedQuality, setSelectedQuality] = useState(0)
   const [comparisonSelections, setComparisonSelections] = useState<ComparisonSelection[]>([])
@@ -451,9 +487,12 @@ function App() {
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
 
   const qualityDefinitions = qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch))
+  const allIndexDefinitions = useMemo(
+    () => [...indexDefinitions, ...qualityDefinitions],
+    [qualityDefinitions],
+  )
   const activeDefinition =
-    [...indexDefinitions, ...qualityDefinitions].find((item) => item.code === selectedIndex) ??
-    indexDefinitions[0]
+    allIndexDefinitions.find((item) => item.code === selectedIndex) ?? indexDefinitions[0]
   const latest = series.at(-1) ?? demoSeries.at(-1)!
   const previous = series.at(-2) ?? latest
   const dailyChange = previous.value ? latest.value / previous.value - 1 : 0
@@ -571,7 +610,12 @@ function App() {
       const loaded = await Promise.all(
         comparisonSelections.map(async (selection) => [
           selection.key,
-          await loadResourceMarketSeries(realm, selection),
+          selection.kind === 'index'
+            ? await loadIndexComparisonSeries(realm, selection)
+            : (await loadResourceMarketSeries(realm, selection)).map((row) => ({
+                date: row.date,
+                value: compareMetric === 'market_value' ? row.market_value : row.vwap,
+              })),
         ] as const),
       )
 
@@ -581,7 +625,6 @@ function App() {
       const rows = buildComparisonRows(
         seriesByKey,
         comparisonSelections,
-        compareMetric,
         compareMode,
         compareTimeframe,
       )
@@ -597,6 +640,25 @@ function App() {
   }, [realm, comparisonSelections, compareMetric, compareMode, compareTimeframe])
 
   function addComparisonSelection() {
+    if (comparisonKind === 'index') {
+      const index = allIndexDefinitions.find((item) => item.code === selectedComparisonIndex)
+      if (!index) return
+
+      const key = `i${index.code}`
+      if (comparisonSelections.some((selection) => selection.key === key)) {
+        return
+      }
+
+      const selection: IndexComparisonSelection = {
+        key,
+        kind: 'index',
+        indexCode: index.code,
+        indexName: index.name,
+      }
+      setComparisonSelections((current) => [...current, selection].slice(0, 6))
+      return
+    }
+
     const resourceId = Number(selectedResourceId)
     const option = resourceOptions.find((resource) => resource.resource_id === resourceId)
     if (!option) return
@@ -606,9 +668,14 @@ function App() {
       return
     }
 
-    setComparisonSelections((current) =>
-      [...current, { key, resourceId, resourceName: option.name, quality: selectedQuality }].slice(0, 6),
-    )
+    const selection: ResourceComparisonSelection = {
+      key,
+      kind: 'resource',
+      resourceId,
+      resourceName: option.name,
+      quality: selectedQuality,
+    }
+    setComparisonSelections((current) => [...current, selection].slice(0, 6))
   }
 
   function removeComparisonSelection(key: string) {
@@ -865,7 +932,7 @@ function App() {
             <div>
               <p className="eyebrow">Comparisons</p>
               <h2>Resource performance workspace</h2>
-              <p>Compare specific resources by VWAP or traded market value across the selected realm.</p>
+              <p>Compare indices or specific resources across the selected realm.</p>
             </div>
             <span className="loading-state">
               <RefreshCw className={isComparisonLoading ? 'spin' : ''} size={15} />
@@ -875,35 +942,67 @@ function App() {
 
           <div className="comparison-controls">
             <label>
-              Resource
-              <select value={selectedResourceId} onChange={(event) => setSelectedResourceId(event.target.value)}>
-                {resourceOptions.map((resource) => (
-                  <option key={resource.resource_id} value={resource.resource_id}>
-                    {resource.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Quality
+              Type
               <select
-                value={selectedQuality}
-                onChange={(event) => setSelectedQuality(Number(event.target.value))}
+                value={comparisonKind}
+                onChange={(event) => setComparisonKind(event.target.value as ComparisonKind)}
               >
-                {qualityLevels.map((quality) => (
-                  <option key={quality} value={quality}>
-                    Q{quality}
-                  </option>
-                ))}
+                <option value="index">Index</option>
+                <option value="resource">Resource</option>
               </select>
             </label>
+            {comparisonKind === 'index' ? (
+              <label className="wide-control">
+                Index
+                <select
+                  value={selectedComparisonIndex}
+                  onChange={(event) => setSelectedComparisonIndex(event.target.value)}
+                >
+                  {allIndexDefinitions.map((index) => (
+                    <option key={index.code} value={index.code}>
+                      {index.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <>
+                <label className="wide-control">
+                  Resource
+                  <select value={selectedResourceId} onChange={(event) => setSelectedResourceId(event.target.value)}>
+                    {resourceOptions.map((resource) => (
+                      <option key={resource.resource_id} value={resource.resource_id}>
+                        {resource.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Quality
+                  <select
+                    value={selectedQuality}
+                    onChange={(event) => setSelectedQuality(Number(event.target.value))}
+                  >
+                    {qualityLevels.map((quality) => (
+                      <option key={quality} value={quality}>
+                        Q{quality}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            )}
             <button className="command-button" onClick={addComparisonSelection} type="button">
               <Plus size={16} />
               Add
             </button>
             <label>
-              Metric
-              <select value={compareMetric} onChange={(event) => setCompareMetric(event.target.value as CompareMetric)}>
+              Resource Metric
+              <select
+                disabled={comparisonSelections.every((selection) => selection.kind === 'index')}
+                value={compareMetric}
+                onChange={(event) => setCompareMetric(event.target.value as CompareMetric)}
+              >
                 <option value="vwap">VWAP</option>
                 <option value="market_value">Market value</option>
               </select>
@@ -912,7 +1011,7 @@ function App() {
               Mode
               <select value={compareMode} onChange={(event) => setCompareMode(event.target.value as CompareMode)}>
                 <option value="percent">% change</option>
-                <option value="absolute">$ value</option>
+                <option value="absolute">$ / index value</option>
               </select>
             </label>
             <label>
@@ -940,9 +1039,9 @@ function App() {
             </label>
           </div>
 
-          <div className="selection-strip" aria-label="Compared resources">
+          <div className="selection-strip" aria-label="Compared series">
             {comparisonSelections.length === 0 ? (
-              <span className="empty-selection">Add up to six resource-quality pairs.</span>
+              <span className="empty-selection">Add up to six indices or resource-quality pairs.</span>
             ) : (
               comparisonSelections.map((selection, index) => (
                 <button
@@ -952,7 +1051,7 @@ function App() {
                   style={{ ['--chip-color' as string]: comparisonColors[index % comparisonColors.length] }}
                   type="button"
                 >
-                  {selection.resourceName} Q{selection.quality}
+                  {comparisonLabel(selection)}
                   <X size={14} />
                 </button>
               ))
@@ -976,9 +1075,7 @@ function App() {
                   formatter={(value, name) => [
                     compareMode === 'percent'
                       ? `${Number(value).toFixed(2)}%`
-                      : compareMetric === 'market_value'
-                        ? formatCompact(Number(value))
-                        : formatNumber(Number(value)),
+                      : formatNumber(Number(value)),
                     name,
                   ]}
                   labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''}
@@ -987,8 +1084,8 @@ function App() {
                 {(comparisonSelections.length
                   ? comparisonSelections
                   : [
-                      { key: 'power', resourceName: 'Power', quality: 2, resourceId: 1 },
-                      { key: 'steel', resourceName: 'Steel', quality: 0, resourceId: 43 },
+                      { key: 'power', kind: 'resource' as const, resourceName: 'Power', quality: 2, resourceId: 1 },
+                      { key: 'steel', kind: 'resource' as const, resourceName: 'Steel', quality: 0, resourceId: 43 },
                     ]
                 ).map((selection, index) => (
                   <Line
@@ -996,7 +1093,7 @@ function App() {
                     dataKey={selection.key}
                     dot={false}
                     key={selection.key}
-                    name={`${selection.resourceName} Q${selection.quality}`}
+                    name={comparisonLabel(selection)}
                     stroke={comparisonColors[index % comparisonColors.length]}
                     strokeWidth={3}
                     type="monotone"
