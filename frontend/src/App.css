@@ -417,7 +417,7 @@
 
 .comparison-controls {
   display: grid;
-  grid-template-columns: minmax(220px, 1.5fr) repeat(6, minmax(110px, 1fr));
+  grid-template-columns: repeat(2, minmax(120px, 1fr)) minmax(220px, 1.5fr) repeat(5, minmax(110px, 1fr));
   gap: 12px;
   align-items: end;
   margin-bottom: 14px;

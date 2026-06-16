@@ -89,6 +89,7 @@ type ComparisonPoint = {
 type ResourceComparisonSelection = {
   key: string
   kind: 'resource'
+  realm: RealmId
   resourceId: number
   resourceName: string
   quality: number
@@ -97,6 +98,7 @@ type ResourceComparisonSelection = {
 type IndexComparisonSelection = {
   key: string
   kind: 'index'
+  realm: RealmId
   indexCode: IndexCode
   indexName: string
 }
@@ -111,6 +113,7 @@ type ComparisonDatum = {
 
 type ComparisonState = {
   kind: ComparisonKind
+  selectedRealm: RealmId
   selectedIndex: IndexCode
   selectedResourceId: string
   selectedQuality: number
@@ -205,9 +208,10 @@ function qualityIndexDefinition(quality: number, includeResearch: boolean): Inde
 }
 
 function comparisonLabel(selection: ComparisonSelection) {
+  const realmName = realms[selection.realm] ?? realms[0]
   return selection.kind === 'index'
-    ? selection.indexName
-    : `${selection.resourceName} Q${selection.quality}`
+    ? `${realmName}: ${selection.indexName}`
+    : `${realmName}: ${selection.resourceName} Q${selection.quality}`
 }
 
 function readJsonStorage<T>(key: string, fallback: T): T {
@@ -222,6 +226,7 @@ function readJsonStorage<T>(key: string, fallback: T): T {
 function comparisonStateFromPreset(preset: ComparisonPreset): ComparisonState {
   return {
     kind: preset.kind,
+    selectedRealm: preset.selectedRealm ?? 0,
     selectedIndex: preset.selectedIndex,
     selectedResourceId: preset.selectedResourceId,
     selectedQuality: preset.selectedQuality,
@@ -454,7 +459,7 @@ async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSel
   const { data, error } = await supabase
     .from('market_daily')
     .select('date,vwap,market_value,volume')
-    .eq('realm_id', realm)
+    .eq('realm_id', selection.realm ?? realm)
     .eq('resource_id', selection.resourceId)
     .eq('quality', selection.quality)
     .order('date', { ascending: true })
@@ -471,7 +476,7 @@ async function loadIndexComparisonSeries(realm: RealmId, selection: ComparisonSe
     return []
   }
 
-  const rows = await loadIndexSeries(realm, selection.indexCode)
+  const rows = await loadIndexSeries(selection.realm ?? realm, selection.indexCode)
   return rows?.map((row) => ({ date: row.date, value: row.value })) ?? []
 }
 
@@ -547,6 +552,9 @@ function App() {
   const [comparisonKind, setComparisonKind] = useState<ComparisonKind>(
     storedComparisonState.kind === 'resource' ? 'resource' : 'index',
   )
+  const [selectedComparisonRealm, setSelectedComparisonRealm] = useState<RealmId>(
+    storedComparisonState.selectedRealm === 1 ? 1 : 0,
+  )
   const [selectedComparisonIndex, setSelectedComparisonIndex] = useState<IndexCode>(
     storedComparisonState.selectedIndex ?? 'total_market',
   )
@@ -618,6 +626,7 @@ function App() {
   useEffect(() => {
     const currentState: ComparisonState = {
       kind: comparisonKind,
+      selectedRealm: selectedComparisonRealm,
       selectedIndex: selectedComparisonIndex,
       selectedResourceId,
       selectedQuality,
@@ -630,6 +639,7 @@ function App() {
     localStorage.setItem(comparisonStateKey, JSON.stringify(currentState))
   }, [
     comparisonKind,
+    selectedComparisonRealm,
     selectedComparisonIndex,
     selectedResourceId,
     selectedQuality,
@@ -699,7 +709,7 @@ function App() {
     let isCurrent = true
 
     async function refreshResources() {
-      const options = await loadResourceOptions(realm)
+      const options = await loadResourceOptions(selectedComparisonRealm)
       if (!isCurrent) return
       setResourceOptions(options)
       setSelectedResourceId((current) => current || options[0]?.resource_id.toString() || '')
@@ -710,7 +720,7 @@ function App() {
     return () => {
       isCurrent = false
     }
-  }, [realm])
+  }, [selectedComparisonRealm])
 
   useEffect(() => {
     let isCurrent = true
@@ -759,7 +769,7 @@ function App() {
       const index = allIndexDefinitions.find((item) => item.code === selectedComparisonIndex)
       if (!index) return
 
-      const key = `i${index.code}`
+      const key = `r${selectedComparisonRealm}i${index.code}`
       if (comparisonSelections.some((selection) => selection.key === key)) {
         return
       }
@@ -767,6 +777,7 @@ function App() {
       const selection: IndexComparisonSelection = {
         key,
         kind: 'index',
+        realm: selectedComparisonRealm,
         indexCode: index.code,
         indexName: index.name,
       }
@@ -778,7 +789,7 @@ function App() {
     const option = resourceOptions.find((resource) => resource.resource_id === resourceId)
     if (!option) return
 
-    const key = `r${resourceId}q${selectedQuality}`
+    const key = `r${selectedComparisonRealm}r${resourceId}q${selectedQuality}`
     if (comparisonSelections.some((selection) => selection.key === key)) {
       return
     }
@@ -786,6 +797,7 @@ function App() {
     const selection: ResourceComparisonSelection = {
       key,
       kind: 'resource',
+      realm: selectedComparisonRealm,
       resourceId,
       resourceName: option.name,
       quality: selectedQuality,
@@ -800,6 +812,7 @@ function App() {
   function currentComparisonState(): ComparisonState {
     return {
       kind: comparisonKind,
+      selectedRealm: selectedComparisonRealm,
       selectedIndex: selectedComparisonIndex,
       selectedResourceId,
       selectedQuality,
@@ -813,6 +826,7 @@ function App() {
 
   function applyComparisonState(state: ComparisonState) {
     setComparisonKind(state.kind)
+    setSelectedComparisonRealm(state.selectedRealm ?? realm)
     setSelectedComparisonIndex(state.selectedIndex)
     setSelectedResourceId(state.selectedResourceId)
     setSelectedQuality(state.selectedQuality)
@@ -1089,7 +1103,7 @@ function App() {
             <div>
               <p className="eyebrow">Comparisons</p>
               <h2>Resource performance workspace</h2>
-              <p>Compare indices or specific resources across the selected realm.</p>
+              <p>Compare indices or specific resources across either realm.</p>
             </div>
             <span className="loading-state">
               <RefreshCw className={isComparisonLoading ? 'spin' : ''} size={15} />
@@ -1098,6 +1112,19 @@ function App() {
           </div>
 
           <div className="comparison-controls">
+            <label>
+              Line Realm
+              <select
+                value={selectedComparisonRealm}
+                onChange={(event) => setSelectedComparisonRealm(Number(event.target.value) as RealmId)}
+              >
+                {Object.entries(realms).map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Type
               <select
@@ -1284,8 +1311,22 @@ function App() {
                 {(comparisonSelections.length
                   ? comparisonSelections
                   : [
-                      { key: 'power', kind: 'resource' as const, resourceName: 'Power', quality: 2, resourceId: 1 },
-                      { key: 'steel', kind: 'resource' as const, resourceName: 'Steel', quality: 0, resourceId: 43 },
+                      {
+                        key: 'power',
+                        kind: 'resource' as const,
+                        realm: 0 as RealmId,
+                        resourceName: 'Power',
+                        quality: 2,
+                        resourceId: 1,
+                      },
+                      {
+                        key: 'steel',
+                        kind: 'resource' as const,
+                        realm: 0 as RealmId,
+                        resourceName: 'Steel',
+                        quality: 0,
+                        resourceId: 43,
+                      },
                     ]
                 ).map((selection, index) => (
                   <Line
