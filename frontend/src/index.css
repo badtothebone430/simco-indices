@@ -28,6 +28,10 @@
   --contest-band: rgba(91, 110, 225, 0.1);
   --contest-border: rgba(91, 110, 225, 0.45);
   --contest-border-alt: rgba(91, 110, 225, 0.82);
+  --technical-demand: rgba(25, 135, 84, 0.09);
+  --technical-demand-line: #198754;
+  --technical-supply: rgba(180, 35, 24, 0.08);
+  --technical-supply-line: #b42318;
   --tooltip-bg: #ffffff;
   --tooltip-text: #162120;
   --shadow-sm: 0 1px 2px rgba(22, 33, 32, 0.09);
@@ -73,6 +77,10 @@
   --contest-band: rgba(142, 154, 255, 0.13);
   --contest-border: rgba(142, 154, 255, 0.5);
   --contest-border-alt: rgba(142, 154, 255, 0.9);
+  --technical-demand: rgba(85, 200, 138, 0.12);
+  --technical-demand-line: #55c88a;
+  --technical-supply: rgba(255, 138, 122, 0.11);
+  --technical-supply-line: #ff8a7a;
   --tooltip-bg: #202b28;
   --tooltip-text: #edf6f3;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);

@@ -150,6 +150,10 @@ type DashboardSignal = {
   target?: DashboardTarget
 }
 
+type DashboardTechnical = DashboardSignal & {
+  technical: TechnicalSignal
+}
+
 type ResourceOption = {
   resource_id: number
   name: string
@@ -160,6 +164,16 @@ type MarketPoint = {
   vwap: number
   market_value: number
   volume: number
+}
+
+type MarketDailyRow = {
+  date: string
+  resource_id: number
+  resource_name: string
+  quality: number
+  vwap: number
+  volume: number
+  market_value: number
 }
 
 type ComparisonPoint = {
@@ -192,6 +206,25 @@ type ComparisonDatum = {
   [key: string]: string | number
 }
 
+type TechnicalPoint = {
+  date: string
+  value: number
+}
+
+type TechnicalSignal = {
+  type: 'demand' | 'supply' | 'ascending-channel' | 'descending-channel' | 'range'
+  title: string
+  detail: string
+  tone: 'positive' | 'negative' | 'neutral'
+  strength: number
+  demandZone?: [number, number]
+  supplyZone?: [number, number]
+  channel?: {
+    upper: [number, number]
+    lower: [number, number]
+  }
+}
+
 type ComparisonState = {
   kind: ComparisonKind
   selectedRealm: RealmId
@@ -214,6 +247,7 @@ type ChartFilters = {
   showPhases: boolean
   showEvents: boolean
   showContests: boolean
+  showTechnicals: boolean
 }
 
 const comparisonStateKey = 'simco-comparison-state'
@@ -787,6 +821,112 @@ async function loadResourceSignal(realm: RealmId): Promise<DashboardSignal | nul
   }
 }
 
+async function loadPagedMarketDailyRows(realm: RealmId, targetDateCount = 12) {
+  const supabase = getSupabase()
+  if (!supabase) {
+    return []
+  }
+
+  const pageSize = 1000
+  const maxRows = 36000
+  const rows: MarketDailyRow[] = []
+  const dates = new Set<string>()
+
+  for (let from = 0; from < maxRows; from += pageSize) {
+    const { data, error } = await supabase
+      .from('market_daily')
+      .select('date,resource_id,resource_name,quality,vwap,volume,market_value')
+      .eq('realm_id', realm)
+      .order('date', { ascending: false })
+      .range(from, from + pageSize - 1)
+
+    if (error || !data?.length) {
+      break
+    }
+
+    const page = data as MarketDailyRow[]
+    rows.push(...page)
+    page.forEach((row) => dates.add(row.date))
+
+    if (dates.size >= targetDateCount || page.length < pageSize) {
+      break
+    }
+  }
+
+  const newestDates = Array.from(dates).sort().slice(-targetDateCount)
+  const newestDateSet = new Set(newestDates)
+  return rows.filter((row) => newestDateSet.has(row.date))
+}
+
+async function loadTechnicalSignal(realm: RealmId): Promise<DashboardTechnical | null> {
+  const rows = await loadPagedMarketDailyRows(realm)
+  if (!rows.length) {
+    return null
+  }
+  const latestDate = rows.map((row) => row.date).sort().at(-1)
+  if (!latestDate) {
+    return null
+  }
+
+  const latestRows = rows.filter((row) => row.date === latestDate)
+  const medianMarketValue = median(latestRows.map((row) => row.market_value))
+  const medianVolume = median(latestRows.map((row) => row.volume))
+  const groupedRows = new Map<string, typeof rows>()
+
+  for (const row of rows) {
+    const key = `${row.resource_id}:${row.quality}`
+    groupedRows.set(key, [...(groupedRows.get(key) ?? []), row])
+  }
+
+  const candidates = Array.from(groupedRows.values())
+    .map((group) => {
+      const series = group
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(-30)
+        .map((row) => ({ date: row.date, value: row.vwap }))
+      const signal = analyzeTechnicals(series) ?? analyzeEmergingTechnicals(series)
+      const latest = [...group].sort((a, b) => b.date.localeCompare(a.date))[0]
+      if (!signal || !latest || series.length < 2) return null
+
+      const marketWeight = Math.log1p(latest.market_value / Math.max(medianMarketValue, 1))
+      const volumeWeight = Math.log1p(latest.volume / Math.max(medianVolume, 1))
+      const actionableWeight = signal.type === 'range' ? 0.35 : 1
+      const score = signal.strength * actionableWeight * (1 + marketWeight + volumeWeight * 0.65)
+      return { latest, series, signal, score }
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+    .sort((a, b) => b.score - a.score)
+
+  const top = candidates[0]
+  if (!top) {
+    return null
+  }
+
+  const direction =
+    top.signal.tone === 'positive'
+      ? 'upside'
+      : top.signal.tone === 'negative'
+        ? 'downside'
+        : 'range-bound'
+
+  return {
+    title: top.signal.title,
+    name: `${top.latest.resource_name} Q${top.latest.quality}`,
+    realm,
+    detail: `${top.latest.resource_name} has the strongest ${direction} technical setup in ${realms[realm]}. ${top.signal.detail} Signal is weighted by ${formatCompact(top.latest.volume)} volume and ${formatCompact(top.latest.market_value)} VWAP-volume value.`,
+    tone: top.signal.tone,
+    series: top.series,
+    technical: top.signal,
+    target: {
+      kind: 'resource',
+      realm,
+      resourceId: top.latest.resource_id,
+      resourceName: top.latest.resource_name,
+      quality: top.latest.quality,
+    },
+  }
+}
+
 async function loadDashboard() {
   const marketSeries = await Promise.all(
     ([0, 1] as RealmId[]).map(async (realmId) => {
@@ -806,6 +946,7 @@ async function loadDashboard() {
   )
 
   const resourceSignals = await Promise.all(([0, 1] as RealmId[]).map(loadResourceSignal))
+  const technicalSignals = await Promise.all(([0, 1] as RealmId[]).map(loadTechnicalSignal))
   const context = await loadChartContext([0, 1], demoSeries[0].date, new Date().toISOString().slice(0, 10))
   const activeEvents = context.events
     .filter((event) => event.until >= new Date().toISOString())
@@ -865,6 +1006,7 @@ async function loadDashboard() {
       const bMagnitude = Number(b?.detail.match(/([\d.]+)%/)?.[1] ?? 0)
       return bMagnitude - aMagnitude
     })[0], watchSignal].filter(Boolean) as DashboardSignal[],
+    technicals: technicalSignals.filter(Boolean) as DashboardTechnical[],
   }
 }
 
@@ -950,6 +1092,156 @@ function comparisonDomain(rows: ComparisonDatum[], keys: string[]) {
   const padding = range > 0 ? range * 0.06 : Math.max(Math.abs(max) * 0.06, 1)
 
   return [min - padding, max + padding] as const
+}
+
+function technicalRowsFromSeries(rows: Array<{ date: string; value: number }>): TechnicalPoint[] {
+  return rows
+    .map((row) => ({ date: row.date, value: Number(row.value) }))
+    .filter((row) => row.date && Number.isFinite(row.value))
+}
+
+function technicalRowsFromComparison(
+  rows: ComparisonDatum[],
+  key: string,
+  timeframe: Timeframe,
+): TechnicalPoint[] {
+  return filterByTimeframe(
+    rows
+      .map((row) => ({ date: row.date, value: Number(row[key]) }))
+      .filter((row) => row.date && Number.isFinite(row.value)),
+    timeframe,
+  )
+}
+
+function linearRegression(values: number[]) {
+  const n = values.length
+  const sumX = values.reduce((sum, _value, index) => sum + index, 0)
+  const sumY = values.reduce((sum, value) => sum + value, 0)
+  const sumXY = values.reduce((sum, value, index) => sum + index * value, 0)
+  const sumXX = values.reduce((sum, _value, index) => sum + index * index, 0)
+  const denominator = n * sumXX - sumX * sumX
+  const slope = denominator === 0 ? 0 : (n * sumXY - sumX * sumY) / denominator
+  const intercept = n === 0 ? 0 : (sumY - slope * sumX) / n
+  return { slope, intercept }
+}
+
+function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null {
+  const rows = inputRows.filter((row) => Number.isFinite(row.value) && row.value > 0).slice(-30)
+  if (rows.length < 5) {
+    return null
+  }
+
+  const values = rows.map((row) => row.value)
+  const latest = values.at(-1)!
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min
+  if (range <= 0) {
+    return null
+  }
+
+  const zoneSize = Math.max(range * 0.14, Math.abs(latest) * 0.018)
+  const demandZone: [number, number] = [min, min + zoneSize]
+  const supplyZone: [number, number] = [max - zoneSize, max]
+  const { slope, intercept } = linearRegression(values)
+  const fitted = values.map((_value, index) => intercept + slope * index)
+  const residuals = values.map((value, index) => value - fitted[index])
+  const upperOffset = Math.max(...residuals)
+  const lowerOffset = Math.min(...residuals)
+  const channelRange = upperOffset - lowerOffset
+  const slopeThreshold = range / Math.max(rows.length * 4.5, 1)
+  const channel =
+    channelRange > 0
+      ? {
+          upper: [intercept + upperOffset, intercept + slope * (rows.length - 1) + upperOffset] as [number, number],
+          lower: [intercept + lowerOffset, intercept + slope * (rows.length - 1) + lowerOffset] as [number, number],
+        }
+      : undefined
+
+  const nearDemand = latest <= demandZone[1]
+  const nearSupply = latest >= supplyZone[0]
+  const demandProximity = Math.max(0, 1 - Math.abs(latest - demandZone[1]) / Math.max(zoneSize, 1))
+  const supplyProximity = Math.max(0, 1 - Math.abs(latest - supplyZone[0]) / Math.max(zoneSize, 1))
+  const channelKind =
+    Math.abs(slope) >= slopeThreshold
+      ? slope > 0
+        ? 'ascending-channel'
+        : 'descending-channel'
+      : null
+  const channelStrength = channelKind ? Math.min(Math.abs(slope) / Math.max(slopeThreshold, 0.000001), 3) / 3 : 0
+  const channelLabel = channelKind === 'ascending-channel' ? 'Ascending Channel' : 'Descending Channel'
+
+  if (nearDemand) {
+    return {
+      type: 'demand',
+      title: 'Testing Demand',
+      detail: `Price is near the recent demand zone around ${formatNumber(demandZone[0])}-${formatNumber(demandZone[1])}.`,
+      tone: 'positive',
+      strength: 1 + demandProximity + channelStrength * 0.35,
+      demandZone,
+      supplyZone,
+      channel: channelKind ? channel : undefined,
+    }
+  }
+
+  if (nearSupply) {
+    return {
+      type: 'supply',
+      title: 'Testing Supply',
+      detail: `Price is near the recent supply zone around ${formatNumber(supplyZone[0])}-${formatNumber(supplyZone[1])}.`,
+      tone: 'negative',
+      strength: 1 + supplyProximity + channelStrength * 0.35,
+      demandZone,
+      supplyZone,
+      channel: channelKind ? channel : undefined,
+    }
+  }
+
+  if (channelKind && channel) {
+    return {
+      type: channelKind,
+      title: channelLabel,
+      detail:
+        channelKind === 'ascending-channel'
+          ? 'Price is moving inside a rising channel, with higher support and resistance levels.'
+          : 'Price is moving inside a falling channel, with lower support and resistance levels.',
+      tone: channelKind === 'ascending-channel' ? 'positive' : 'negative',
+      strength: 0.8 + channelStrength,
+      demandZone,
+      supplyZone,
+      channel,
+    }
+  }
+
+  return {
+    type: 'range',
+    title: 'Range Watch',
+    detail: `Price is between demand near ${formatNumber(demandZone[0])} and supply near ${formatNumber(supplyZone[1])}.`,
+    tone: 'neutral',
+    strength: 0.35,
+    demandZone,
+    supplyZone,
+  }
+}
+
+function analyzeEmergingTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null {
+  const rows = inputRows.filter((row) => Number.isFinite(row.value) && row.value > 0).slice(-4)
+  if (rows.length < 2) {
+    return null
+  }
+
+  const first = rows[0].value
+  const latest = rows.at(-1)!.value
+  const change = first ? latest / first - 1 : 0
+  const tone = change >= 0 ? 'positive' : 'negative'
+
+  return {
+    type: change >= 0 ? 'ascending-channel' : 'descending-channel',
+    title: change >= 0 ? 'Emerging Upside Setup' : 'Emerging Downside Setup',
+    detail: `Only ${rows.length} technical points are available, but price is ${change >= 0 ? 'pushing higher' : 'pressing lower'} by ${formatPercent(change)} over that window.`,
+    tone,
+    strength: 0.55 + Math.min(Math.abs(change) * 3, 0.8),
+  }
 }
 
 function chartDateWindow(rows: { date: string }[]) {
@@ -1167,6 +1459,95 @@ function renderContextOverlays(
   )
 }
 
+function renderTechnicalOverlays(
+  rows: TechnicalPoint[],
+  signal: TechnicalSignal | null,
+  keyPrefix: string,
+  color = 'var(--accent)',
+) {
+  if (!signal || rows.length < 2) {
+    return null
+  }
+
+  const startDate = rows[0].date
+  const endDate = rows.at(-1)!.date
+
+  return (
+    <>
+      {signal.demandZone && (
+        <ReferenceArea
+          fill="var(--technical-demand)"
+          fillOpacity={1}
+          ifOverflow="visible"
+          key={`${keyPrefix}-demand-zone`}
+          label={{
+            value: 'Demand zone',
+            fill: 'var(--technical-demand-line)',
+            fontSize: 11,
+            position: 'insideBottomLeft',
+          }}
+          stroke="var(--technical-demand-line)"
+          strokeDasharray="5 4"
+          x1={startDate}
+          x2={endDate}
+          y1={signal.demandZone[0]}
+          y2={signal.demandZone[1]}
+        />
+      )}
+      {signal.supplyZone && (
+        <ReferenceArea
+          fill="var(--technical-supply)"
+          fillOpacity={1}
+          ifOverflow="visible"
+          key={`${keyPrefix}-supply-zone`}
+          label={{
+            value: 'Supply zone',
+            fill: 'var(--technical-supply-line)',
+            fontSize: 11,
+            position: 'insideTopLeft',
+          }}
+          stroke="var(--technical-supply-line)"
+          strokeDasharray="5 4"
+          x1={startDate}
+          x2={endDate}
+          y1={signal.supplyZone[0]}
+          y2={signal.supplyZone[1]}
+        />
+      )}
+      {signal.channel && (
+        <>
+          <ReferenceLine
+            ifOverflow="visible"
+            key={`${keyPrefix}-channel-upper`}
+            label={{
+              value: signal.type === 'ascending-channel' ? 'Ascending channel' : 'Descending channel',
+              fill: color,
+              fontSize: 11,
+              position: 'insideTopRight',
+            }}
+            segment={[
+              { x: startDate, y: signal.channel.upper[0] },
+              { x: endDate, y: signal.channel.upper[1] },
+            ]}
+            stroke={color}
+            strokeDasharray="6 5"
+          />
+          <ReferenceLine
+            ifOverflow="visible"
+            key={`${keyPrefix}-channel-lower`}
+            segment={[
+              { x: startDate, y: signal.channel.lower[0] },
+              { x: endDate, y: signal.channel.lower[1] },
+            ]}
+            stroke={color}
+            strokeDasharray="6 5"
+          />
+        </>
+      )}
+    </>
+  )
+}
+
 function ChartTooltip({
   active,
   payload,
@@ -1241,7 +1622,15 @@ function ChartTooltip({
   )
 }
 
-function MiniChart({ data, tone = 'neutral' }: { data: MiniPoint[]; tone?: DashboardSignal['tone'] }) {
+function MiniChart({
+  data,
+  tone = 'neutral',
+  technical,
+}: {
+  data: MiniPoint[]
+  tone?: DashboardSignal['tone']
+  technical?: TechnicalSignal | null
+}) {
   if (data.length < 2) {
     return <div className="mini-chart empty">No trend yet</div>
   }
@@ -1250,6 +1639,56 @@ function MiniChart({ data, tone = 'neutral' }: { data: MiniPoint[]; tone?: Dashb
     <div className={`mini-chart ${tone}`} aria-hidden="true">
       <ResponsiveContainer width="100%" height="100%">
         <RechartsLineChart data={data}>
+          <XAxis dataKey="date" hide />
+          <YAxis hide domain={['auto', 'auto']} />
+          {technical && (
+            <>
+              {technical.demandZone && (
+                <ReferenceArea
+                  fill="var(--technical-demand)"
+                  fillOpacity={1}
+                  stroke="var(--technical-demand-line)"
+                  strokeDasharray="4 4"
+                  x1={data[0].date}
+                  x2={data.at(-1)!.date}
+                  y1={technical.demandZone[0]}
+                  y2={technical.demandZone[1]}
+                />
+              )}
+              {technical.supplyZone && (
+                <ReferenceArea
+                  fill="var(--technical-supply)"
+                  fillOpacity={1}
+                  stroke="var(--technical-supply-line)"
+                  strokeDasharray="4 4"
+                  x1={data[0].date}
+                  x2={data.at(-1)!.date}
+                  y1={technical.supplyZone[0]}
+                  y2={technical.supplyZone[1]}
+                />
+              )}
+              {technical.channel && (
+                <>
+                  <ReferenceLine
+                    segment={[
+                      { x: data[0].date, y: technical.channel.upper[0] },
+                      { x: data.at(-1)!.date, y: technical.channel.upper[1] },
+                    ]}
+                    stroke="currentColor"
+                    strokeDasharray="4 4"
+                  />
+                  <ReferenceLine
+                    segment={[
+                      { x: data[0].date, y: technical.channel.lower[0] },
+                      { x: data.at(-1)!.date, y: technical.channel.lower[1] },
+                    ]}
+                    stroke="currentColor"
+                    strokeDasharray="4 4"
+                  />
+                </>
+              )}
+            </>
+          )}
           <Line
             dataKey="value"
             dot={false}
@@ -1289,6 +1728,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [dashboardMarkets, setDashboardMarkets] = useState<DashboardMarket[]>([])
   const [dashboardSignals, setDashboardSignals] = useState<DashboardSignal[]>([])
+  const [dashboardTechnicals, setDashboardTechnicals] = useState<DashboardTechnical[]>([])
   const [isDashboardLoading, setIsDashboardLoading] = useState(false)
   const [resourceOptions, setResourceOptions] = useState<ResourceOption[]>([])
   const [comparisonKind, setComparisonKind] = useState<ComparisonKind>(
@@ -1318,6 +1758,7 @@ function App() {
   const [showPhases, setShowPhases] = useState(Boolean(storedChartFilters.showPhases))
   const [showEvents, setShowEvents] = useState(Boolean(storedChartFilters.showEvents))
   const [showContests, setShowContests] = useState(Boolean(storedChartFilters.showContests))
+  const [showTechnicals, setShowTechnicals] = useState(Boolean(storedChartFilters.showTechnicals))
   const [overviewContext, setOverviewContext] = useState<ChartContext>({
     phases: [],
     events: [],
@@ -1366,7 +1807,26 @@ function App() {
     () => contextForSelections(comparisonContext, comparisonSelections),
     [comparisonContext, comparisonSelections],
   )
-
+  const overviewTechnicalRows = useMemo(() => technicalRowsFromSeries(visibleSeries), [visibleSeries])
+  const overviewTechnicalSignal = useMemo(
+    () => analyzeTechnicals(overviewTechnicalRows),
+    [overviewTechnicalRows],
+  )
+  const comparisonTechnicals = useMemo(
+    () =>
+      activeComparisonKeys
+        .map((key, index) => {
+          const rows = technicalRowsFromComparison(comparisonSeries, key, compareTimeframe)
+          return {
+            key,
+            rows,
+            color: comparisonColors[index % comparisonColors.length],
+            signal: analyzeTechnicals(rows),
+          }
+        })
+        .filter((item) => item.signal),
+    [activeComparisonKeys, comparisonSeries, compareTimeframe],
+  )
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('simco-theme', theme)
@@ -1424,6 +1884,7 @@ function App() {
       if (!isCurrent) return
       setDashboardMarkets(data.markets)
       setDashboardSignals(data.signals)
+      setDashboardTechnicals(data.technicals)
       setIsDashboardLoading(false)
     }
 
@@ -1439,9 +1900,10 @@ function App() {
       showPhases,
       showEvents,
       showContests,
+      showTechnicals,
     }
     localStorage.setItem(chartFiltersKey, JSON.stringify(filters))
-  }, [showPhases, showEvents, showContests])
+  }, [showPhases, showEvents, showContests, showTechnicals])
 
   useEffect(() => {
     let isCurrent = true
@@ -1711,10 +2173,7 @@ function App() {
     setComparisonKind('resource')
     setSelectedResourceId(target.resourceId.toString())
     setSelectedQuality(target.quality)
-    setComparisonSelections((current) => [
-      selection,
-      ...current.filter((item) => item.key !== selection.key),
-    ].slice(0, 6))
+    setComparisonSelections([selection])
     setActiveView('compare')
   }
 
@@ -1784,6 +2243,13 @@ function App() {
           type="button"
         >
           Show Contests
+        </button>
+        <button
+          className={showTechnicals ? 'active' : ''}
+          onClick={() => setShowTechnicals((current) => !current)}
+          type="button"
+        >
+          Show Technicals
         </button>
       </section>
 
@@ -1893,6 +2359,49 @@ function App() {
               </article>
             ))}
           </div>
+
+          <section className="technical-panel">
+            <div className="panel-header compact">
+              <div>
+                <p className="eyebrow">Technical Analysis</p>
+                <h2>Levels and channels</h2>
+              </div>
+            </div>
+            <div className="technical-grid">
+              {(dashboardTechnicals.length ? dashboardTechnicals : [
+                {
+                  title: 'Waiting for setup',
+                  name: 'No signal yet',
+                  realm: 0 as RealmId,
+                  detail: 'The dashboard will highlight a resource when enough technical history is available.',
+                  tone: 'neutral' as const,
+                  series: [],
+                  technical: null,
+                  target: undefined,
+                },
+              ]).map((item) => (
+                <article className="technical-card" key={item.realm}>
+                  <div>
+                    <p className="eyebrow">{realms[item.realm]}</p>
+                    <strong>{item.name}</strong>
+                    <span>{item.title}: {item.detail}</span>
+                  </div>
+                  <div className="dashboard-card-side">
+                    <MiniChart data={item.series} technical={item.technical} tone={item.tone} />
+                    <button
+                      className="go-to-button"
+                      disabled={!item.target}
+                      onClick={() => item.target && goToDashboardTarget(item.target)}
+                      type="button"
+                    >
+                      <ArrowUpRight size={15} />
+                      Go To
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         </section>
       )}
 
@@ -2015,6 +2524,12 @@ function App() {
                       )}
                     />
                     {renderContextOverlays(overviewContext, showPhases, showEvents, showContests, 'overview')}
+                    {showTechnicals &&
+                      renderTechnicalOverlays(
+                        overviewTechnicalRows,
+                        overviewTechnicalSignal,
+                        'overview-technical',
+                      )}
                     <Area
                       dataKey="value"
                       type="monotone"
@@ -2319,6 +2834,15 @@ function App() {
                   showContests,
                   'comparison',
                 )}
+                {showTechnicals &&
+                  comparisonTechnicals.map((item) =>
+                    renderTechnicalOverlays(
+                      item.rows,
+                      item.signal,
+                      `comparison-technical-${item.key}`,
+                      item.color,
+                    ),
+                  )}
                 <Legend />
                 {(comparisonSelections.length
                   ? comparisonSelections
