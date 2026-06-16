@@ -732,6 +732,7 @@ function App() {
       }
 
       setIsComparisonLoading(true)
+      setComparisonSeries([])
       const loaded = await Promise.all(
         comparisonSelections.map(async (selection) => [
           selection.key,
@@ -1331,9 +1332,11 @@ function App() {
                 ).map((selection, index) => (
                   <Line
                     activeDot={{ r: 5 }}
+                    animationBegin={0}
+                    animationDuration={700}
                     dataKey={selection.key}
                     dot={false}
-                    isAnimationActive={false}
+                    isAnimationActive
                     key={selection.key}
                     name={comparisonLabel(selection)}
                     stroke={comparisonColors[index % comparisonColors.length]}
