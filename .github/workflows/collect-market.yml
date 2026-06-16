@@ -31,4 +31,4 @@ jobs:
         env:
           SIMCO_SUPABASE_URL: ${{ secrets.SIMCO_SUPABASE_URL }}
           SIMCO_SUPABASE_SECRET_KEY: ${{ secrets.SIMCO_SUPABASE_SECRET_KEY }}
-
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}

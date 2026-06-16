@@ -94,6 +94,36 @@
   margin-bottom: 18px;
 }
 
+.view-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.view-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+}
+
+.view-tabs button.active {
+  color: var(--heading);
+  background: var(--elevated);
+  box-shadow: var(--shadow-sm);
+}
+
 .segmented-control {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(150px, 1fr));
@@ -357,6 +387,97 @@
   overflow: hidden;
 }
 
+.comparison-panel {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.comparison-heading {
+  align-items: flex-start;
+}
+
+.comparison-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(6, minmax(110px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.comparison-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.comparison-controls select {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--heading);
+  background: var(--elevated);
+}
+
+.command-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 38px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: #ffffff;
+  background: var(--accent);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.command-button:hover {
+  background: var(--accent-strong);
+}
+
+.selection-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 38px;
+  margin-bottom: 14px;
+}
+
+.empty-selection {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.selection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--chip-color) 70%, var(--border));
+  border-radius: 999px;
+  color: var(--heading);
+  background: color-mix(in srgb, var(--chip-color) 12%, var(--surface));
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.comparison-chart {
+  min-height: 320px;
+  min-width: 0;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -440,9 +561,14 @@ tbody tr:hover {
   }
 
   .segmented-control,
+  .view-tabs,
   .dashboard-grid {
     width: 100%;
     grid-template-columns: 1fr;
+  }
+
+  .comparison-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .index-grid {
@@ -479,5 +605,9 @@ tbody tr:hover {
 
   .toggle-row {
     white-space: normal;
+  }
+
+  .comparison-controls {
+    grid-template-columns: 1fr;
   }
 }

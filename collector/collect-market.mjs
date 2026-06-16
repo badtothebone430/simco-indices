@@ -6,6 +6,7 @@ const RATE_LIMIT_DELAY_MS = 2500
 const MAX_FETCH_ATTEMPTS = 5
 const BASE_INDEX_VALUE = 1000
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
+const startedAt = Date.now()
 
 const FOOD_RESOURCE_NAMES = new Set([
   'apple cider',
@@ -65,6 +66,73 @@ class SimcotoolsError extends Error {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+function workflowRunUrl() {
+  const serverUrl = process.env.GITHUB_SERVER_URL
+  const repository = process.env.GITHUB_REPOSITORY
+  const runId = process.env.GITHUB_RUN_ID
+
+  if (!serverUrl || !repository || !runId) {
+    return null
+  }
+
+  return `${serverUrl}/${repository}/actions/runs/${runId}`
+}
+
+async function sendDiscordWebhook({ ok, results, error }) {
+  const webhookUrl = process.env.DISCORD_WEBHOOK
+  if (!webhookUrl) {
+    return
+  }
+
+  const runUrl = workflowRunUrl()
+  const duration = formatDuration(Date.now() - startedAt)
+  const realmSummary = results
+    ?.map(
+      (result) =>
+        `Realm ${result.realm}: ${result.marketRows} market rows, ${result.indexValues} index rows`,
+    )
+    .join('\n')
+
+  const content = ok
+    ? [
+        'SimCo Indices updated successfully.',
+        `Duration: ${duration}`,
+        realmSummary,
+        runUrl ? `Run: ${runUrl}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : [
+        'SimCo Indices update failed.',
+        `Duration: ${duration}`,
+        `Error: ${error?.message ?? String(error)}`,
+        runUrl ? `Run: ${runUrl}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n')
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    })
+
+    if (!response.ok) {
+      console.warn(`Discord webhook failed with ${response.status}`)
+    }
+  } catch (webhookError) {
+    console.warn(`Discord webhook failed: ${webhookError.message}`)
+  }
 }
 
 function retryDelayMs(response, attempt) {
@@ -385,10 +453,13 @@ async function main() {
     results.push(await collectRealm(supabase, realm))
   }
 
-  console.log(JSON.stringify({ ok: true, collectedAt: new Date().toISOString(), results }, null, 2))
+  const summary = { ok: true, collectedAt: new Date().toISOString(), results }
+  console.log(JSON.stringify(summary, null, 2))
+  await sendDiscordWebhook(summary)
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error(error)
+  await sendDiscordWebhook({ ok: false, error })
   process.exitCode = 1
 })
