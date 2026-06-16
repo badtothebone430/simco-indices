@@ -5,6 +5,8 @@ import {
   ArrowUpRight,
   BarChart3,
   CalendarClock,
+  Car,
+  Cpu,
   Database,
   FlaskConical,
   Globe2,
@@ -13,11 +15,17 @@ import {
   Moon,
   Plus,
   RefreshCw,
+  Rocket,
   Save,
   Soup,
+  Sparkles,
+  Sprout,
   Sun,
+  Pickaxe,
+  Shirt,
   Trash2,
   X,
+  Zap,
 } from 'lucide-react'
 import {
   Area,
@@ -1276,7 +1284,14 @@ function App() {
                   {item.code === 'food_only' && <Soup size={18} />}
                   {item.code === 'construction_only' && <Hammer size={18} />}
                   {item.code === 'equal_weight_market' && <BarChart3 size={18} />}
-                  {item.method === 'Category' && <BarChart3 size={18} />}
+                  {item.code === 'agriculture_only' && <Sprout size={18} />}
+                  {item.code === 'fashion_only' && <Shirt size={18} />}
+                  {item.code === 'energy_only' && <Zap size={18} />}
+                  {item.code === 'electronics_only' && <Cpu size={18} />}
+                  {item.code === 'automotive_only' && <Car size={18} />}
+                  {item.code === 'aerospace_only' && <Rocket size={18} />}
+                  {item.code === 'resources_only' && <Pickaxe size={18} />}
+                  {item.code === 'seasonal_only' && <Sparkles size={18} />}
                 </span>
                 <span>
                   <strong>{item.name}</strong>
