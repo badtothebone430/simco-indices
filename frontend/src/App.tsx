@@ -13,8 +13,10 @@ import {
   Moon,
   Plus,
   RefreshCw,
+  Save,
   Soup,
   Sun,
+  Trash2,
   X,
 } from 'lucide-react'
 import {
@@ -107,6 +109,26 @@ type ComparisonDatum = {
   [key: string]: string | number
 }
 
+type ComparisonState = {
+  kind: ComparisonKind
+  selectedIndex: IndexCode
+  selectedResourceId: string
+  selectedQuality: number
+  selections: ComparisonSelection[]
+  mode: CompareMode
+  metric: CompareMetric
+  timeframe: Timeframe
+  height: number
+}
+
+type ComparisonPreset = ComparisonState & {
+  id: string
+  name: string
+}
+
+const comparisonStateKey = 'simco-comparison-state'
+const comparisonPresetsKey = 'simco-comparison-presets'
+
 const realms: Record<RealmId, string> = {
   0: 'Magnates',
   1: 'Entrepreneurs',
@@ -186,6 +208,29 @@ function comparisonLabel(selection: ComparisonSelection) {
   return selection.kind === 'index'
     ? selection.indexName
     : `${selection.resourceName} Q${selection.quality}`
+}
+
+function readJsonStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function comparisonStateFromPreset(preset: ComparisonPreset): ComparisonState {
+  return {
+    kind: preset.kind,
+    selectedIndex: preset.selectedIndex,
+    selectedResourceId: preset.selectedResourceId,
+    selectedQuality: preset.selectedQuality,
+    selections: preset.selections,
+    mode: preset.mode,
+    metric: preset.metric,
+    timeframe: preset.timeframe,
+    height: preset.height,
+  }
 }
 
 const demoSeries: IndexPoint[] = Array.from({ length: 30 }, (_, index) => {
@@ -457,7 +502,34 @@ function buildComparisonRows(
   return Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date))
 }
 
+function comparisonKeys(selections: ComparisonSelection[]) {
+  return selections.length > 0 ? selections.map((selection) => selection.key) : ['power', 'steel']
+}
+
+function comparisonDomain(rows: ComparisonDatum[], keys: string[]) {
+  const values = rows.flatMap((row) =>
+    keys
+      .map((key) => row[key])
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
+  )
+
+  if (values.length === 0) {
+    return ['auto', 'auto'] as const
+  }
+
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min
+  const padding = range > 0 ? range * 0.06 : Math.max(Math.abs(max) * 0.06, 1)
+
+  return [min - padding, max + padding] as const
+}
+
 function App() {
+  const storedComparisonState = useMemo(
+    () => readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
+    [],
+  )
   const [activeView, setActiveView] = useState<AppView>('overview')
   const [realm, setRealm] = useState<RealmId>(0)
   const [selectedIndex, setSelectedIndex] = useState<IndexCode>('total_market')
@@ -472,16 +544,26 @@ function App() {
   const [usingDemoData, setUsingDemoData] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [resourceOptions, setResourceOptions] = useState<ResourceOption[]>([])
-  const [comparisonKind, setComparisonKind] = useState<ComparisonKind>('index')
-  const [selectedComparisonIndex, setSelectedComparisonIndex] = useState<IndexCode>('total_market')
-  const [selectedResourceId, setSelectedResourceId] = useState('')
-  const [selectedQuality, setSelectedQuality] = useState(0)
-  const [comparisonSelections, setComparisonSelections] = useState<ComparisonSelection[]>([])
+  const [comparisonKind, setComparisonKind] = useState<ComparisonKind>(
+    storedComparisonState.kind === 'resource' ? 'resource' : 'index',
+  )
+  const [selectedComparisonIndex, setSelectedComparisonIndex] = useState<IndexCode>(
+    storedComparisonState.selectedIndex ?? 'total_market',
+  )
+  const [selectedResourceId, setSelectedResourceId] = useState(storedComparisonState.selectedResourceId ?? '')
+  const [selectedQuality, setSelectedQuality] = useState(storedComparisonState.selectedQuality ?? 0)
+  const [comparisonSelections, setComparisonSelections] = useState<ComparisonSelection[]>(
+    storedComparisonState.selections ?? [],
+  )
   const [comparisonSeries, setComparisonSeries] = useState<ComparisonDatum[]>(demoComparisonData)
-  const [compareMode, setCompareMode] = useState<CompareMode>('percent')
-  const [compareMetric, setCompareMetric] = useState<CompareMetric>('vwap')
-  const [compareTimeframe, setCompareTimeframe] = useState<Timeframe>('30d')
-  const [comparisonHeight, setComparisonHeight] = useState(460)
+  const [compareMode, setCompareMode] = useState<CompareMode>(storedComparisonState.mode ?? 'percent')
+  const [compareMetric, setCompareMetric] = useState<CompareMetric>(storedComparisonState.metric ?? 'vwap')
+  const [compareTimeframe, setCompareTimeframe] = useState<Timeframe>(storedComparisonState.timeframe ?? '30d')
+  const [comparisonHeight, setComparisonHeight] = useState(storedComparisonState.height ?? 460)
+  const [presetName, setPresetName] = useState('')
+  const [comparisonPresets, setComparisonPresets] = useState<ComparisonPreset[]>(() =>
+    readJsonStorage<ComparisonPreset[]>(comparisonPresetsKey, []),
+  )
   const [isComparisonLoading, setIsComparisonLoading] = useState(false)
   const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
@@ -510,6 +592,11 @@ function App() {
       })),
     [series],
   )
+  const activeComparisonKeys = useMemo(() => comparisonKeys(comparisonSelections), [comparisonSelections])
+  const activeComparisonDomain = useMemo(
+    () => comparisonDomain(comparisonSeries, activeComparisonKeys),
+    [comparisonSeries, activeComparisonKeys],
+  )
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -527,6 +614,35 @@ function App() {
     const interval = window.setInterval(refreshCountdown, 1000)
     return () => window.clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    const currentState: ComparisonState = {
+      kind: comparisonKind,
+      selectedIndex: selectedComparisonIndex,
+      selectedResourceId,
+      selectedQuality,
+      selections: comparisonSelections,
+      mode: compareMode,
+      metric: compareMetric,
+      timeframe: compareTimeframe,
+      height: comparisonHeight,
+    }
+    localStorage.setItem(comparisonStateKey, JSON.stringify(currentState))
+  }, [
+    comparisonKind,
+    selectedComparisonIndex,
+    selectedResourceId,
+    selectedQuality,
+    comparisonSelections,
+    compareMode,
+    compareMetric,
+    compareTimeframe,
+    comparisonHeight,
+  ])
+
+  useEffect(() => {
+    localStorage.setItem(comparisonPresetsKey, JSON.stringify(comparisonPresets))
+  }, [comparisonPresets])
 
   useEffect(() => {
     let isCurrent = true
@@ -586,8 +702,7 @@ function App() {
       const options = await loadResourceOptions(realm)
       if (!isCurrent) return
       setResourceOptions(options)
-      setSelectedResourceId(options[0]?.resource_id.toString() ?? '')
-      setComparisonSelections([])
+      setSelectedResourceId((current) => current || options[0]?.resource_id.toString() || '')
     }
 
     refreshResources()
@@ -682,6 +797,48 @@ function App() {
     setComparisonSelections((current) => current.filter((selection) => selection.key !== key))
   }
 
+  function currentComparisonState(): ComparisonState {
+    return {
+      kind: comparisonKind,
+      selectedIndex: selectedComparisonIndex,
+      selectedResourceId,
+      selectedQuality,
+      selections: comparisonSelections,
+      mode: compareMode,
+      metric: compareMetric,
+      timeframe: compareTimeframe,
+      height: comparisonHeight,
+    }
+  }
+
+  function applyComparisonState(state: ComparisonState) {
+    setComparisonKind(state.kind)
+    setSelectedComparisonIndex(state.selectedIndex)
+    setSelectedResourceId(state.selectedResourceId)
+    setSelectedQuality(state.selectedQuality)
+    setComparisonSelections(state.selections)
+    setCompareMode(state.mode)
+    setCompareMetric(state.metric)
+    setCompareTimeframe(state.timeframe)
+    setComparisonHeight(state.height)
+  }
+
+  function saveComparisonPreset() {
+    if (comparisonSelections.length === 0) return
+
+    const preset: ComparisonPreset = {
+      ...currentComparisonState(),
+      id: crypto.randomUUID(),
+      name: presetName.trim() || `Preset ${comparisonPresets.length + 1}`,
+    }
+    setComparisonPresets((current) => [preset, ...current].slice(0, 12))
+    setPresetName('')
+  }
+
+  function deleteComparisonPreset(id: string) {
+    setComparisonPresets((current) => current.filter((preset) => preset.id !== id))
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -700,7 +857,7 @@ function App() {
           </button>
           <div className="status-strip">
             <span className={usingDemoData ? 'status-dot demo' : 'status-dot live'} />
-            {usingDemoData ? 'Demo data' : 'Supabase live'}
+            {usingDemoData ? 'Demo data' : 'Database Live'}
           </div>
         </div>
       </header>
@@ -877,8 +1034,8 @@ function App() {
               <div className="data-source">
                 <Database size={17} />
                 {usingDemoData
-                  ? 'Connect Supabase to replace this placeholder dataset.'
-                  : 'Reading from index_values and index_components.'}
+                  ? 'Live market history appears here after the database is connected.'
+                  : 'Updated from the latest collected market snapshot.'}
               </div>
             </aside>
           </section>
@@ -999,7 +1156,10 @@ function App() {
             <label>
               Resource Metric
               <select
-                disabled={comparisonSelections.every((selection) => selection.kind === 'index')}
+                disabled={
+                  comparisonSelections.length > 0 &&
+                  comparisonSelections.every((selection) => selection.kind === 'index')
+                }
                 value={compareMetric}
                 onChange={(event) => setCompareMetric(event.target.value as CompareMetric)}
               >
@@ -1058,12 +1218,52 @@ function App() {
             )}
           </div>
 
+          <div className="preset-row">
+            <label>
+              Preset Name
+              <input
+                placeholder="My comparison"
+                value={presetName}
+                onChange={(event) => setPresetName(event.target.value)}
+              />
+            </label>
+            <button
+              className="secondary-command"
+              disabled={comparisonSelections.length === 0}
+              onClick={saveComparisonPreset}
+              type="button"
+            >
+              <Save size={16} />
+              Save Preset
+            </button>
+            {comparisonPresets.length > 0 && (
+              <div className="preset-list" aria-label="Saved comparison presets">
+                {comparisonPresets.map((preset) => (
+                  <span className="preset-item" key={preset.id}>
+                    <button onClick={() => applyComparisonState(comparisonStateFromPreset(preset))} type="button">
+                      {preset.name}
+                    </button>
+                    <button
+                      aria-label={`Delete ${preset.name}`}
+                      className="preset-delete"
+                      onClick={() => deleteComparisonPreset(preset.id)}
+                      type="button"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="comparison-chart" style={{ height: comparisonHeight }}>
             <ResponsiveContainer width="100%" height="100%">
               <RechartsLineChart data={comparisonSeries} margin={{ top: 12, right: 20, left: 4, bottom: 4 }}>
                 <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
                 <XAxis dataKey="label" minTickGap={24} tickLine={false} axisLine={false} />
                 <YAxis
+                  domain={activeComparisonDomain}
                   tickFormatter={(value) =>
                     compareMode === 'percent' ? `${Number(value).toFixed(0)}%` : formatCompact(Number(value))
                   }
@@ -1092,6 +1292,7 @@ function App() {
                     activeDot={{ r: 5 }}
                     dataKey={selection.key}
                     dot={false}
+                    isAnimationActive={false}
                     key={selection.key}
                     name={comparisonLabel(selection)}
                     stroke={comparisonColors[index % comparisonColors.length]}

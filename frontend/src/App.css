@@ -441,6 +441,12 @@
   background: var(--elevated);
 }
 
+.comparison-controls select:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .command-button {
   display: inline-flex;
   align-items: center;
@@ -457,6 +463,12 @@
 
 .command-button:hover {
   background: var(--accent-strong);
+}
+
+.command-button:disabled,
+.secondary-command:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .selection-strip {
@@ -488,6 +500,92 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 800;
+}
+
+.preset-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.preset-row label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.preset-row input {
+  height: 38px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--heading);
+  background: var(--elevated);
+}
+
+.secondary-command {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--heading);
+  background: var(--elevated);
+  cursor: pointer;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.secondary-command:hover,
+.preset-item button:hover {
+  background: var(--hover);
+}
+
+.preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+}
+
+.preset-item {
+  display: inline-flex;
+  overflow: hidden;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--elevated);
+}
+
+.preset-item button {
+  min-height: 34px;
+  border: 0;
+  color: var(--heading);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.preset-item button:first-child {
+  padding: 0 10px 0 12px;
+}
+
+.preset-delete {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  border-left: 1px solid var(--border) !important;
+  color: var(--muted) !important;
 }
 
 .comparison-chart {
@@ -586,6 +684,11 @@ tbody tr:hover {
 
   .comparison-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .preset-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .index-grid {
