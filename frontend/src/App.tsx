@@ -4280,6 +4280,10 @@ function App() {
               <h2>Latest updates</h2>
               <p>Major feature releases and data pipeline changes for the indices site.</p>
             </div>
+            <div className="version-badge" aria-label="Current version">
+              <span>Version</span>
+              <strong>v1.1.12</strong>
+            </div>
           </div>
 
           <div className="changelog-list">
