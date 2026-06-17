@@ -1,12 +1,14 @@
-name: Backfill 30 days
+name: Backfill historical range
 
 on:
   workflow_dispatch:
     inputs:
-      days:
-        description: "Number of latest market days to backfill"
+      start_date:
+        description: "First market date to backfill, YYYY-MM-DD"
         required: true
-        default: "30"
+      end_date:
+        description: "Last market date to backfill, YYYY-MM-DD"
+        required: true
       realm:
         description: "Realm to backfill: all, 0, or 1"
         required: true
@@ -15,7 +17,7 @@ on:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     defaults:
       run:
         working-directory: collector
@@ -33,10 +35,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Backfill market data
+      - name: Backfill historical market data
         run: npm run backfill:30d
         env:
-          BACKFILL_DAYS: ${{ inputs.days }}
+          BACKFILL_START_DATE: ${{ inputs.start_date }}
+          BACKFILL_END_DATE: ${{ inputs.end_date }}
           BACKFILL_REALM: ${{ inputs.realm }}
           SIMCO_SUPABASE_URL: ${{ secrets.SIMCO_SUPABASE_URL }}
           SIMCO_SUPABASE_SECRET_KEY: ${{ secrets.SIMCO_SUPABASE_SECRET_KEY }}

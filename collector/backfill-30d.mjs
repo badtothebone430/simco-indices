@@ -6,6 +6,9 @@ const RATE_LIMIT_DELAY_MS = 2500
 const MAX_FETCH_ATTEMPTS = 5
 const BASE_INDEX_VALUE = 1000
 const BACKFILL_DAYS = Number(process.env.BACKFILL_DAYS ?? 30)
+const BACKFILL_START_DATE = process.env.BACKFILL_START_DATE ?? ''
+const BACKFILL_END_DATE = process.env.BACKFILL_END_DATE ?? ''
+const BACKFILL_REALM = process.env.BACKFILL_REALM ?? 'all'
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 
 const FOOD_RESOURCE_NAMES = new Set([
@@ -399,6 +402,42 @@ function toDateOnly(value) {
   return value.slice(0, 10)
 }
 
+function isDateOnly(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime())
+}
+
+function configuredRealms() {
+  if (BACKFILL_REALM === 'all') {
+    return REALMS
+  }
+
+  const realm = Number(BACKFILL_REALM)
+  if (!REALMS.includes(realm)) {
+    throw new Error(`BACKFILL_REALM must be 0, 1, or all. Received: ${BACKFILL_REALM}`)
+  }
+
+  return [realm]
+}
+
+function targetDatesFromRows(allRows) {
+  const allDates = Array.from(new Set(allRows.map((row) => row.date))).sort()
+  const hasRange = Boolean(BACKFILL_START_DATE || BACKFILL_END_DATE)
+
+  if (!hasRange) {
+    return allDates.slice(-BACKFILL_DAYS)
+  }
+
+  if (!isDateOnly(BACKFILL_START_DATE) || !isDateOnly(BACKFILL_END_DATE)) {
+    throw new Error('BACKFILL_START_DATE and BACKFILL_END_DATE must both be set as YYYY-MM-DD for range backfills')
+  }
+
+  if (BACKFILL_START_DATE > BACKFILL_END_DATE) {
+    throw new Error('BACKFILL_START_DATE must be before or equal to BACKFILL_END_DATE')
+  }
+
+  return allDates.filter((date) => date >= BACKFILL_START_DATE && date <= BACKFILL_END_DATE)
+}
+
 function isResearchRow(row) {
   return row.resource_name.toLowerCase().includes('research')
 }
@@ -611,7 +650,7 @@ async function backfillRealm(supabase, realm) {
     }
   }
 
-  const targetDates = Array.from(new Set(allRows.map((row) => row.date))).sort().slice(-BACKFILL_DAYS)
+  const targetDates = targetDatesFromRows(allRows)
   const targetDateSet = new Set(targetDates)
   const rows = allRows.filter((row) => targetDateSet.has(row.date))
   const { indexValues, indexComponents } = buildBackfillIndices(realm, rows, targetDates)
@@ -650,11 +689,24 @@ async function main() {
   })
 
   const results = []
-  for (const realm of REALMS) {
+  const realms = configuredRealms()
+  console.log(
+    BACKFILL_START_DATE || BACKFILL_END_DATE
+      ? `Backfilling range ${BACKFILL_START_DATE} to ${BACKFILL_END_DATE} for realms ${realms.join(', ')}`
+      : `Backfilling latest ${BACKFILL_DAYS} market days for realms ${realms.join(', ')}`,
+  )
+  for (const realm of realms) {
     results.push(await backfillRealm(supabase, realm))
   }
 
-  console.log(JSON.stringify({ ok: true, backfillDays: BACKFILL_DAYS, results }, null, 2))
+  console.log(JSON.stringify({
+    ok: true,
+    backfillDays: BACKFILL_DAYS,
+    startDate: BACKFILL_START_DATE || null,
+    endDate: BACKFILL_END_DATE || null,
+    realms,
+    results,
+  }, null, 2))
 }
 
 main().catch((error) => {
