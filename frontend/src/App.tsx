@@ -3357,51 +3357,6 @@ function App() {
         </div>
       </section>
 
-      <section className="chart-overlay-controls" aria-label="Chart overlays">
-        <button
-          className={showPhases ? 'active' : ''}
-          onClick={() => setShowPhases((current) => !current)}
-          type="button"
-        >
-          Show Phase
-        </button>
-        <button
-          className={showEvents ? 'active' : ''}
-          onClick={() => setShowEvents((current) => !current)}
-          type="button"
-        >
-          Show Events
-        </button>
-        <button
-          className={showContests ? 'active' : ''}
-          onClick={() => setShowContests((current) => !current)}
-          type="button"
-        >
-          Show Contests
-        </button>
-        <button
-          className={showOrders ? 'active' : ''}
-          onClick={() => setShowOrders((current) => !current)}
-          type="button"
-        >
-          Show Orders
-        </button>
-        <button
-          className={showTechnicals ? 'active' : ''}
-          onClick={() => setShowTechnicals((current) => !current)}
-          type="button"
-        >
-          Show Technicals
-        </button>
-        <button
-          className={showVolume ? 'active' : ''}
-          onClick={() => setShowVolume((current) => !current)}
-          type="button"
-        >
-          Show Volume
-        </button>
-      </section>
-
       <button
         aria-expanded={isMobileNavOpen}
         aria-controls="primary-navigation"
@@ -3459,6 +3414,51 @@ function App() {
           Changelog
         </button>
       </nav>
+
+      <section className="chart-overlay-controls" aria-label="Chart overlays">
+        <button
+          className={showPhases ? 'active' : ''}
+          onClick={() => setShowPhases((current) => !current)}
+          type="button"
+        >
+          Show Phase
+        </button>
+        <button
+          className={showEvents ? 'active' : ''}
+          onClick={() => setShowEvents((current) => !current)}
+          type="button"
+        >
+          Show Events
+        </button>
+        <button
+          className={showContests ? 'active' : ''}
+          onClick={() => setShowContests((current) => !current)}
+          type="button"
+        >
+          Show Contests
+        </button>
+        <button
+          className={showOrders ? 'active' : ''}
+          onClick={() => setShowOrders((current) => !current)}
+          type="button"
+        >
+          Show Orders
+        </button>
+        <button
+          className={showTechnicals ? 'active' : ''}
+          onClick={() => setShowTechnicals((current) => !current)}
+          type="button"
+        >
+          Show Technicals
+        </button>
+        <button
+          className={showVolume ? 'active' : ''}
+          onClick={() => setShowVolume((current) => !current)}
+          type="button"
+        >
+          Show Volume
+        </button>
+      </section>
 
       {activeView === 'dashboard' && (
         <section className="clean-dashboard view-panel">
