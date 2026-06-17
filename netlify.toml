@@ -3,8 +3,13 @@
   command = "npm run build"
   publish = "dist"
 
+[functions]
+  directory = "netlify/functions"
+
+[functions."trigger-collect"]
+  schedule = "20 1 * * *"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
-

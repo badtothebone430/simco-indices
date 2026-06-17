@@ -2,8 +2,6 @@ name: Collect market data
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "22 1 * * *"
 
 jobs:
   collect:

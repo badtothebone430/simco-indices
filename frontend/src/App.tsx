@@ -378,6 +378,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Added small UI improvements and clearer site footer details.',
       'Made current basket tables scrollable with sticky headers.',
       'Added index tooltips, favicon update, and dashboard signal refinements.',
+      'Improved daily data collection scheduling reliability.',
     ],
   },
   {
@@ -699,7 +700,7 @@ function toDateOnly(value: string) {
 
 function nextUpdateDate(now = new Date()) {
   const next = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 1, 30, 0),
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 1, 20, 0),
   )
 
   if (next <= now) {
@@ -2572,7 +2573,7 @@ function App() {
           </div>
           {showCollectionNotice && (
             <div className="collection-notice">
-              Daily collection is running around 1:30 UTC; visible changes may arrive a little later.
+              Daily collection is running around 1:20 UTC; visible changes may arrive a little later.
             </div>
           )}
         </div>
