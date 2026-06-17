@@ -403,6 +403,59 @@
   margin-bottom: 0;
 }
 
+.refresh-progress {
+  display: grid;
+  gap: 8px;
+  width: min(248px, 34vw);
+  color: var(--muted);
+}
+
+.refresh-progress.idle {
+  width: auto;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.refresh-progress-label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-height: 22px;
+}
+
+.refresh-progress-label strong {
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.refresh-progress-label span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.refresh-track {
+  height: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 65%, white);
+}
+
+.refresh-fill {
+  height: 100%;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 75%, #7c3aed));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 36%, transparent);
+  transition: width 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 .market-summary-grid,
 .signal-grid {
   display: grid;
@@ -461,11 +514,17 @@
 
 .signal-card {
   display: flex;
+  align-items: stretch;
   justify-content: space-between;
   gap: 14px;
   min-height: 190px;
   padding: 18px;
   border-left-width: 4px;
+}
+
+.signal-card .dashboard-card-main {
+  display: flex;
+  flex-direction: column;
 }
 
 .signal-card.positive {
@@ -496,11 +555,33 @@
   color: var(--text);
 }
 
+.dashboard-token {
+  display: inline;
+  padding: 0 3px;
+  border-radius: 4px;
+  color: var(--heading);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 900;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.dashboard-token.positive {
+  color: var(--positive);
+  background: var(--phase-boom);
+}
+
+.dashboard-token.negative {
+  color: var(--negative);
+  background: var(--phase-recession);
+}
+
 .impact-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  margin-top: 4px;
+  margin-top: auto;
+  padding-top: 14px;
 }
 
 .impact-pills span {
@@ -549,7 +630,7 @@
 }
 
 .technical-card strong,
-.technical-card span {
+.technical-detail {
   display: block;
 }
 
@@ -559,7 +640,7 @@
   font-size: 18px;
 }
 
-.technical-card span {
+.technical-detail {
   color: var(--text);
   font-size: 14px;
 }
@@ -1517,6 +1598,10 @@ tbody tr:hover {
 
   .components-panel {
     max-height: 520px;
+  }
+
+  .refresh-progress {
+    width: min(100%, 260px);
   }
 
   .comparison-controls {

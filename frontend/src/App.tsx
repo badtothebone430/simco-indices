@@ -55,6 +55,7 @@ type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
 type Timeframe = '7d' | '30d' | '90d' | 'all'
+type ResourceQualitySelection = number | 'weighted'
 
 type IndexDefinition = {
   code: IndexCode
@@ -151,9 +152,9 @@ type DashboardSignal = {
   tone: 'positive' | 'negative' | 'neutral'
   series: MiniPoint[]
   target?: DashboardTarget
-  winner?: 'Producers' | 'Buyers'
+  winner?: 'Producers' | 'Buyers' | 'Research Industry'
   loser?: 'Producers' | 'Buyers' | 'Buyers & Producers'
-  beneficiary?: 'Rival industries'
+  beneficiary?: 'Rival Industries'
 }
 
 type DashboardTechnical = DashboardSignal & {
@@ -193,7 +194,7 @@ type ResourceComparisonSelection = {
   realm: RealmId
   resourceId: number
   resourceName: string
-  quality: number
+  quality: ResourceQualitySelection
 }
 
 type IndexComparisonSelection = {
@@ -237,7 +238,7 @@ type ComparisonState = {
   selectedRealm: RealmId
   selectedIndex: IndexCode
   selectedResourceId: string
-  selectedQuality: number
+  selectedQuality: ResourceQualitySelection
   selections: ComparisonSelection[]
   mode: CompareMode
   metric: CompareMetric
@@ -379,6 +380,13 @@ const changelogEntries: ChangelogEntry[] = [
       'Made current basket tables scrollable with sticky headers.',
       'Added index tooltips, favicon update, and dashboard signal refinements.',
       'Improved daily data collection scheduling reliability.',
+      'Added broad market dashboard handling for transport speed modifiers.',
+      'Improved dashboard winner/loser logic for essential resources.',
+      'Improved repeat-visit loading speed with current-day market caching and manual refresh.',
+      'Calibrated dashboard movement labels so small high-volume moves are not overstated.',
+      'Added weighted all-quality comparison for individual resources.',
+      'Improved dashboard number precision and highlighted key values in signal text.',
+      'Added smoother dashboard refresh progress feedback.',
     ],
   },
   {
@@ -546,11 +554,19 @@ function qualityIndexDefinition(quality: number, includeResearch: boolean): Inde
   }
 }
 
+function resourceQualityLabel(quality: ResourceQualitySelection) {
+  return quality === 'weighted' ? 'Weighted qualities' : `Q${quality}`
+}
+
+function resourceQualityKey(quality: ResourceQualitySelection) {
+  return quality === 'weighted' ? 'weighted' : quality.toString()
+}
+
 function comparisonLabel(selection: ComparisonSelection) {
   const realmName = realms[selection.realm] ?? realms[0]
   return selection.kind === 'index'
     ? `${realmName}: ${selection.indexName}`
-    : `${realmName}: ${selection.resourceName} Q${selection.quality}`
+    : `${realmName}: ${selection.resourceName} ${resourceQualityLabel(selection.quality)}`
 }
 
 function readJsonStorage<T>(key: string, fallback: T): T {
@@ -560,6 +576,61 @@ function readJsonStorage<T>(key: string, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+type CachedValue<T> = {
+  cycleKey: string
+  savedAt: string
+  value: T
+}
+
+const dataCachePrefix = 'simco-data-cache:v2:'
+
+function latestUpdateCycleKey(now = new Date()) {
+  // The collector starts at 01:20 UTC, but cache should expire when new data is expected to be visible.
+  const update = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 1, 30, 0),
+  )
+
+  if (now < update) {
+    update.setUTCDate(update.getUTCDate() - 1)
+  }
+
+  return update.toISOString().slice(0, 10)
+}
+
+function dataCacheKey(key: string) {
+  return `${dataCachePrefix}${key}`
+}
+
+function readDataCache<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(dataCacheKey(key))
+    if (!raw) return null
+    const cached = JSON.parse(raw) as CachedValue<T>
+    return cached.cycleKey === latestUpdateCycleKey() ? cached.value : null
+  } catch {
+    return null
+  }
+}
+
+function writeDataCache<T>(key: string, value: T) {
+  try {
+    const cached: CachedValue<T> = {
+      cycleKey: latestUpdateCycleKey(),
+      savedAt: new Date().toISOString(),
+      value,
+    }
+    localStorage.setItem(dataCacheKey(key), JSON.stringify(cached))
+  } catch {
+    // Cache writes can fail in private browsing or when storage is full.
+  }
+}
+
+function clearDataCache() {
+  Object.keys(localStorage)
+    .filter((key) => key.startsWith(dataCachePrefix))
+    .forEach((key) => localStorage.removeItem(key))
 }
 
 function comparisonStateFromPreset(preset: ComparisonPreset): ComparisonState {
@@ -663,6 +734,13 @@ function getSupabase() {
 function formatNumber(value: number) {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: value >= 100 ? 0 : 2,
+  }).format(value)
+}
+
+function formatPriceLevel(value: number) {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: Math.abs(value) < 1 ? 3 : 2,
+    minimumFractionDigits: Math.abs(value) < 1 ? 3 : 0,
   }).format(value)
 }
 
@@ -861,10 +939,102 @@ function speedModifierDirection(speedModifier: number) {
   return 'Expected direction: neutral unless demand shifts elsewhere.'
 }
 
+function isTransportEvent(event: RealmEvent) {
+  return event.resource_name.trim().toLowerCase() === 'transport'
+}
+
+function isEssentialInfrastructureEvent(event: RealmEvent) {
+  return ['transport', 'power', 'construction units'].includes(event.resource_name.trim().toLowerCase())
+}
+
+function speedModifierImpact(event: RealmEvent) {
+  if (event.speed_modifier > 0) {
+    return {
+      winner: 'Buyers' as const,
+      loser: 'Producers' as const,
+      beneficiary: undefined,
+    }
+  }
+
+  if (event.speed_modifier < 0 && isEssentialInfrastructureEvent(event)) {
+    if (isTransportEvent(event)) {
+      return {
+        winner: 'Research Industry' as const,
+        loser: 'Buyers' as const,
+        beneficiary: undefined,
+      }
+    }
+
+    return {
+      winner: undefined,
+      loser: 'Buyers' as const,
+      beneficiary: 'Rival Industries' as const,
+    }
+  }
+
+  if (event.speed_modifier < 0) {
+    return {
+      winner: undefined,
+      loser: 'Buyers & Producers' as const,
+      beneficiary: 'Rival Industries' as const,
+    }
+  }
+
+  return {
+    winner: undefined,
+    loser: undefined,
+    beneficiary: undefined,
+  }
+}
+
+function essentialInfrastructureNote(event: RealmEvent) {
+  if (event.speed_modifier >= 0 || !isEssentialInfrastructureEvent(event)) {
+    return ''
+  }
+
+  if (isTransportEvent(event)) {
+    return ' Transport is essential to most users, but research is mostly outside that supply chain, so transport pressure is likely bad for buyers while the research industry becomes the relative winner.'
+  }
+
+  return ` ${event.resource_name} is essential to most users, so reduced supply is likely bad for buyers while rival industries become the relative winners.`
+}
+
+function transportModifierDetail(event: RealmEvent) {
+  const direction = event.speed_modifier < 0
+    ? 'transport supply is slower, so most non-research resources may see higher logistics pressure, firmer prices, and weaker traded volume.'
+    : 'transport supply is faster, so most non-research resources may see easier logistics, softer price pressure, and stronger traded volume.'
+
+  return `Transport has a ${event.speed_modifier > 0 ? '+' : ''}${event.speed_modifier}% production speed modifier active in ${realms[event.realm_id]}. Because transport is used across most supply chains apart from research, ${direction}${essentialInfrastructureNote(event)}`
+}
+
+function eventDashboardImpact(event: RealmEvent) {
+  const broadMarketMultiplier = isTransportEvent(event) ? 2.25 : 1
+  return Math.abs(event.speed_modifier) * broadMarketMultiplier
+}
+
 function movementStoryScore(change: number, marketValue: number, volume: number, medianMarketValue: number, medianVolume: number) {
   const marketWeight = Math.log1p(marketValue / Math.max(medianMarketValue, 1))
   const volumeWeight = Math.log1p(volume / Math.max(medianVolume, 1))
   return Math.abs(change) * (1 + marketWeight + volumeWeight * 0.7)
+}
+
+function movementStoryTitle(change: number) {
+  const absoluteChange = Math.abs(change)
+  const isPositive = change >= 0
+
+  if (absoluteChange >= 0.12) {
+    return isPositive ? 'Major Surge' : 'Massive Drop'
+  }
+
+  if (absoluteChange >= 0.05) {
+    return isPositive ? 'Strong Rise' : 'Sharp Drop'
+  }
+
+  if (absoluteChange >= 0.02) {
+    return isPositive ? 'Notable Gain' : 'Significant Drop'
+  }
+
+  return isPositive ? 'High-Volume Gain' : 'High-Volume Dip'
 }
 
 function median(values: number[]) {
@@ -975,6 +1145,10 @@ async function loadResourceSignal(realm: RealmId): Promise<DashboardSignal | nul
   }
 
   const direction = top.change >= 0 ? 'surged' : 'dropped'
+  const absoluteChange = Math.abs(top.change)
+  const scaleNote = absoluteChange < 0.02
+    ? ' It is highlighted because the traded volume and VWAP-volume market value make the move market-relevant.'
+    : ''
   const series = rows
     .filter((row) => row.resource_id === top.row.resource_id && row.quality === top.row.quality)
     .sort((a, b) => a.date.localeCompare(b.date))
@@ -982,10 +1156,10 @@ async function loadResourceSignal(realm: RealmId): Promise<DashboardSignal | nul
     .map((row) => ({ date: row.date, value: row.vwap }))
 
   return {
-    title: top.change >= 0 ? 'Major Surge' : 'Massive Drop',
+    title: movementStoryTitle(top.change),
     name: `${top.row.resource_name} Q${top.row.quality}`,
     realm,
-    detail: `${top.row.resource_name} ${direction} ${Math.abs(top.change * 100).toFixed(1)}% on the latest snapshot, with ${formatCompact(top.row.volume)} volume traded and ${formatCompact(top.row.market_value)} in VWAP-volume market value.`,
+    detail: `${top.row.resource_name} ${direction} ${(absoluteChange * 100).toFixed(1)}% on the latest snapshot, with ${formatCompact(top.row.volume)} volume traded and ${formatCompact(top.row.market_value)} in VWAP-volume market value.${scaleNote}`,
     tone: top.change >= 0 ? 'positive' : 'negative',
     series,
     winner: top.change >= 0 ? 'Producers' : 'Buyers',
@@ -1129,7 +1303,7 @@ async function loadDashboard() {
   const context = await loadChartContext([0, 1], demoSeries[0].date, new Date().toISOString().slice(0, 10))
   const activeEvents = context.events
     .filter((event) => event.until >= new Date().toISOString())
-    .sort((a, b) => Math.abs(b.speed_modifier) - Math.abs(a.speed_modifier))
+    .sort((a, b) => eventDashboardImpact(b) - eventDashboardImpact(a))
   const activeContests = context.contests
     .filter((contest) => contest.end_at >= new Date().toISOString())
     .sort((a, b) => b.start_at.localeCompare(a.start_at))
@@ -1138,24 +1312,48 @@ async function loadDashboard() {
     ([0, 1] as RealmId[]).map(async (realmId) => {
       const watchEvent = activeEvents.find((event) => event.realm_id === realmId)
       const watchContest = activeContests.find((contest) => contest.realm_id === realmId)
-      const watchEventMini = watchEvent
+      const watchEventMini = watchEvent && !isTransportEvent(watchEvent)
         ? await loadResourceMiniSeries(watchEvent.realm_id, watchEvent.resource_id)
         : null
+      const watchEventIndexRows = watchEvent && isTransportEvent(watchEvent)
+        ? (await loadIndexSeries(watchEvent.realm_id, 'total_market')) ?? []
+        : []
       const watchContestMini = watchContest?.resource_id
         ? await loadResourceMiniSeries(watchContest.realm_id, watchContest.resource_id)
         : null
 
       if (watchEvent) {
+        const impact = speedModifierImpact(watchEvent)
+
+        if (isTransportEvent(watchEvent)) {
+          return {
+            title: watchEvent.speed_modifier < 0 ? 'Logistics Pressure' : 'Logistics Boost',
+            name: 'Most non-research resources',
+            realm: watchEvent.realm_id,
+            detail: transportModifierDetail(watchEvent),
+            tone: watchEvent.speed_modifier >= 0 ? 'positive' : 'negative',
+            series: watchEventIndexRows.slice(-30).map((row) => ({ date: row.date, value: row.value })),
+            winner: impact.winner,
+            loser: impact.loser,
+            beneficiary: impact.beneficiary,
+            target: {
+              kind: 'index',
+              realm: watchEvent.realm_id,
+              indexCode: 'total_market',
+            },
+          } satisfies DashboardSignal
+        }
+
         return {
           title: watchEvent.speed_modifier < 0 ? 'Supply Pressure' : 'Production Boost',
           name: watchEvent.resource_name,
           realm: watchEvent.realm_id,
-          detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}`,
+          detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}${essentialInfrastructureNote(watchEvent)}`,
           tone: watchEvent.speed_modifier >= 0 ? 'positive' : 'negative',
           series: watchEventMini?.series ?? [],
-          winner: watchEvent.speed_modifier > 0 ? 'Buyers' : undefined,
-          loser: watchEvent.speed_modifier < 0 ? 'Buyers & Producers' : 'Producers',
-          beneficiary: watchEvent.speed_modifier < 0 ? 'Rival industries' : undefined,
+          winner: impact.winner,
+          loser: impact.loser,
+          beneficiary: impact.beneficiary,
           target: {
             kind: 'resource',
             realm: watchEvent.realm_id,
@@ -1209,19 +1407,43 @@ async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSel
     return []
   }
 
-  const { data, error } = await supabase
+  const query = supabase
     .from('market_daily')
     .select('date,vwap,market_value,volume')
     .eq('realm_id', selection.realm ?? realm)
     .eq('resource_id', selection.resourceId)
-    .eq('quality', selection.quality)
     .order('date', { ascending: true })
+
+  if (selection.quality !== 'weighted') {
+    query.eq('quality', selection.quality)
+  }
+
+  const { data, error } = await query
 
   if (error || !data?.length) {
     return []
   }
 
-  return data as MarketPoint[]
+  const rows = data as MarketPoint[]
+  if (selection.quality !== 'weighted') {
+    return rows
+  }
+
+  const byDate = new Map<string, { volume: number; market_value: number; weightedVwap: number }>()
+  for (const row of rows) {
+    const current = byDate.get(row.date) ?? { volume: 0, market_value: 0, weightedVwap: 0 }
+    current.volume += row.volume
+    current.market_value += row.market_value
+    current.weightedVwap += row.vwap * row.volume
+    byDate.set(row.date, current)
+  }
+
+  return Array.from(byDate.entries()).map(([date, row]) => ({
+    date,
+    volume: row.volume,
+    market_value: row.market_value,
+    vwap: row.volume > 0 ? row.weightedVwap / row.volume : 0,
+  }))
 }
 
 async function loadIndexComparisonSeries(realm: RealmId, selection: ComparisonSelection) {
@@ -1379,7 +1601,7 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
     return {
       type: 'demand',
       title: 'Testing Demand',
-      detail: `Price is near the recent demand zone around ${formatNumber(demandZone[0])}-${formatNumber(demandZone[1])}.`,
+      detail: `Price is near the recent demand zone around ${formatPriceLevel(demandZone[0])}-${formatPriceLevel(demandZone[1])}.`,
       tone: 'positive',
       strength: 1 + demandProximity + channelStrength * 0.35,
       demandZone,
@@ -1392,7 +1614,7 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
     return {
       type: 'supply',
       title: 'Testing Supply',
-      detail: `Price is near the recent supply zone around ${formatNumber(supplyZone[0])}-${formatNumber(supplyZone[1])}.`,
+      detail: `Price is near the recent supply zone around ${formatPriceLevel(supplyZone[0])}-${formatPriceLevel(supplyZone[1])}.`,
       tone: 'negative',
       strength: 1 + supplyProximity + channelStrength * 0.35,
       demandZone,
@@ -1420,7 +1642,7 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
   return {
     type: 'range',
     title: 'Range Watch',
-    detail: `Price is between demand near ${formatNumber(demandZone[0])} and supply near ${formatNumber(supplyZone[1])}.`,
+    detail: `Price is between demand near ${formatPriceLevel(demandZone[0])} and supply near ${formatPriceLevel(supplyZone[1])}.`,
     tone: 'neutral',
     strength: 0.35,
     demandZone,
@@ -1908,6 +2130,96 @@ function MiniChart({
   )
 }
 
+function DashboardDetail({
+  text,
+  tone = 'neutral',
+}: {
+  text: string
+  tone?: DashboardSignal['tone']
+}) {
+  const pattern =
+    /(\b(?:Magnates|Entrepreneurs|Q\d+|VWAP-volume|market value|volume traded|supply zone|demand zone)\b|[+-]?\d+(?:\.\d+)?%|\b\d+(?:\.\d+)?(?:B|M|K)\b|\b\d+(?:\.\d+)?-\d+(?:\.\d+)?\b)/g
+  const tokenPattern =
+    /^(\b(?:Magnates|Entrepreneurs|Q\d+|VWAP-volume|market value|volume traded|supply zone|demand zone)\b|[+-]?\d+(?:\.\d+)?%|\b\d+(?:\.\d+)?(?:B|M|K)\b|\b\d+(?:\.\d+)?-\d+(?:\.\d+)?\b)$/
+  const parts = text.split(pattern).filter(Boolean)
+
+  return (
+    <>
+      {parts.map((part, index) => {
+        const percentValue = part.endsWith('%') ? Number(part.replace('%', '')) : null
+        const isSignedPercent = part.startsWith('+') || part.startsWith('-')
+        const toneClass =
+          percentValue === null || Number.isNaN(percentValue)
+            ? ''
+            : isSignedPercent && percentValue < 0
+              ? ' negative'
+              : isSignedPercent && percentValue > 0
+                ? ' positive'
+                : tone === 'negative'
+                  ? ' negative'
+                  : tone === 'positive'
+                    ? ' positive'
+                : ''
+
+        return tokenPattern.test(part) ? (
+          <span className={`dashboard-token${toneClass}`} key={`${part}-${index}`}>
+            {part}
+          </span>
+        ) : (
+          part
+        )
+      })}
+    </>
+  )
+}
+
+function RefreshProgress({ active }: { active: boolean }) {
+  const [progress, setProgress] = useState(active ? 12 : 100)
+
+  useEffect(() => {
+    if (!active) {
+      setProgress(100)
+      return
+    }
+
+    setProgress(12)
+    const interval = window.setInterval(() => {
+      setProgress((current) => {
+        if (current >= 88) {
+          return current + Math.random() * 1.2
+        }
+
+        return Math.min(92, current + Math.max(1.5, (94 - current) * 0.08))
+      })
+    }, 260)
+
+    return () => window.clearInterval(interval)
+  }, [active])
+
+  if (!active) {
+    return (
+      <div className="refresh-progress idle">
+        <span>Ready</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="refresh-progress" aria-label="Dashboard refresh progress">
+      <div className="refresh-progress-label">
+        <strong>{Math.min(99, Math.round(progress))}%</strong>
+        <span>
+          <RefreshCw className="spin" size={15} />
+          Refreshing
+        </span>
+      </div>
+      <div className="refresh-track">
+        <div className="refresh-fill" style={{ width: `${Math.min(99, progress)}%` }} />
+      </div>
+    </div>
+  )
+}
+
 function GuidedTour({
   steps,
   stepIndex,
@@ -2032,7 +2344,9 @@ function App() {
     storedComparisonState.selectedIndex ?? 'total_market',
   )
   const [selectedResourceId, setSelectedResourceId] = useState(storedComparisonState.selectedResourceId ?? '')
-  const [selectedQuality, setSelectedQuality] = useState(storedComparisonState.selectedQuality ?? 0)
+  const [selectedQuality, setSelectedQuality] = useState<ResourceQualitySelection>(
+    storedComparisonState.selectedQuality ?? 'weighted',
+  )
   const [comparisonSelections, setComparisonSelections] = useState<ComparisonSelection[]>(
     storedComparisonState.selections ?? [],
   )
@@ -2066,6 +2380,7 @@ function App() {
   const [showTour, setShowTour] = useState(() => localStorage.getItem(tourDismissedKey) !== 'true')
   const [tourStepIndex, setTourStepIndex] = useState(0)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
+  const [dataRefreshToken, setDataRefreshToken] = useState(0)
 
   const qualityDefinitions = qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch))
   const allIndexDefinitions = useMemo(
@@ -2181,12 +2496,22 @@ function App() {
     let isCurrent = true
 
     async function refreshDashboard() {
+      const cacheKey = 'dashboard'
+      const cached = readDataCache<Awaited<ReturnType<typeof loadDashboard>>>(cacheKey)
+      if (cached) {
+        setDashboardMarkets(cached.markets)
+        setDashboardSignals(cached.signals)
+        setDashboardTechnicals(cached.technicals)
+        return
+      }
+
       setIsDashboardLoading(true)
       const data = await loadDashboard()
       if (!isCurrent) return
       setDashboardMarkets(data.markets)
       setDashboardSignals(data.signals)
       setDashboardTechnicals(data.technicals)
+      writeDataCache(cacheKey, data)
       setIsDashboardLoading(false)
     }
 
@@ -2195,7 +2520,7 @@ function App() {
     return () => {
       isCurrent = false
     }
-  }, [])
+  }, [dataRefreshToken])
 
   useEffect(() => {
     const filters: ChartFilters = {
@@ -2211,9 +2536,17 @@ function App() {
     let isCurrent = true
 
     async function refreshOverviewContext() {
+      const cacheKey = `overview-context:${realm}:${overviewDateWindow.startDate}:${overviewDateWindow.endDate}`
+      const cached = readDataCache<ChartContext>(cacheKey)
+      if (cached) {
+        setOverviewContext(cached)
+        return
+      }
+
       const context = await loadChartContext([realm], overviewDateWindow.startDate, overviewDateWindow.endDate)
       if (isCurrent) {
         setOverviewContext(context)
+        writeDataCache(cacheKey, context)
       }
     }
 
@@ -2222,31 +2555,48 @@ function App() {
     return () => {
       isCurrent = false
     }
-  }, [realm, overviewDateWindow.startDate, overviewDateWindow.endDate])
+  }, [realm, overviewDateWindow.startDate, overviewDateWindow.endDate, dataRefreshToken])
 
   useEffect(() => {
     let isCurrent = true
 
     async function refreshData() {
+      const cacheKey = `overview-data:${realm}:${selectedIndex}`
+      const cached = readDataCache<{
+        series: IndexPoint[]
+        components: ComponentRow[]
+        usingDemoData: boolean
+      }>(cacheKey)
+      if (cached) {
+        setSeries(cached.series)
+        setComponents(cached.components)
+        setUsingDemoData(cached.usingDemoData)
+        return
+      }
+
       setIsLoading(true)
       const loadedSeries = await loadIndexSeries(realm, selectedIndex)
 
       if (!isCurrent) return
 
       if (!loadedSeries) {
-        setSeries(
-          demoSeries.map((point) => ({
-            ...point,
-            realm_id: realm,
-            index_code: selectedIndex,
-            value:
-              point.value +
-              (realm === 1 ? 34 : 0) +
-              (selectedIndex === 'sc_10' ? 110 : selectedIndex === 'equal_weight_market' ? -42 : 0),
-          })),
-        )
+        const fallbackSeries = demoSeries.map((point) => ({
+          ...point,
+          realm_id: realm,
+          index_code: selectedIndex,
+          value:
+            point.value +
+            (realm === 1 ? 34 : 0) +
+            (selectedIndex === 'sc_10' ? 110 : selectedIndex === 'equal_weight_market' ? -42 : 0),
+        }))
+        setSeries(fallbackSeries)
         setComponents(demoComponents)
         setUsingDemoData(true)
+        writeDataCache(cacheKey, {
+          series: fallbackSeries,
+          components: demoComponents,
+          usingDemoData: true,
+        })
         setIsLoading(false)
         return
       }
@@ -2259,6 +2609,11 @@ function App() {
 
       setComponents(loadedComponents ?? [])
       setUsingDemoData(false)
+      writeDataCache(cacheKey, {
+        series: loadedSeries,
+        components: loadedComponents ?? [],
+        usingDemoData: false,
+      })
       setIsLoading(false)
     }
 
@@ -2267,7 +2622,7 @@ function App() {
     return () => {
       isCurrent = false
     }
-  }, [realm, selectedIndex])
+  }, [realm, selectedIndex, dataRefreshToken])
 
   useEffect(() => {
     if (selectedIndex === 'quality_0' || selectedIndex === 'quality_0_with_research') {
@@ -2276,13 +2631,28 @@ function App() {
   }, [q0IncludesResearch, selectedIndex])
 
   useEffect(() => {
+    if (comparisonKind === 'resource' && storedComparisonState.selectedQuality === undefined) {
+      setSelectedQuality('weighted')
+    }
+  }, [comparisonKind, storedComparisonState.selectedQuality])
+
+  useEffect(() => {
     let isCurrent = true
 
     async function refreshResources() {
+      const cacheKey = `resources:${selectedComparisonRealm}`
+      const cached = readDataCache<ResourceOption[]>(cacheKey)
+      if (cached) {
+        setResourceOptions(cached)
+        setSelectedResourceId((current) => current || cached[0]?.resource_id.toString() || '')
+        return
+      }
+
       const options = await loadResourceOptions(selectedComparisonRealm)
       if (!isCurrent) return
       setResourceOptions(options)
       setSelectedResourceId((current) => current || options[0]?.resource_id.toString() || '')
+      writeDataCache(cacheKey, options)
     }
 
     refreshResources()
@@ -2290,7 +2660,7 @@ function App() {
     return () => {
       isCurrent = false
     }
-  }, [selectedComparisonRealm])
+  }, [selectedComparisonRealm, dataRefreshToken])
 
   useEffect(() => {
     let isCurrent = true
@@ -2298,6 +2668,15 @@ function App() {
     async function refreshComparison() {
       if (comparisonSelections.length === 0) {
         setComparisonSeries(demoComparisonData)
+        return
+      }
+
+      const cacheKey = `comparison:${compareMetric}:${compareMode}:${compareTimeframe}:${comparisonSelections
+        .map((selection) => selection.key)
+        .join('|')}`
+      const cached = readDataCache<ComparisonDatum[]>(cacheKey)
+      if (cached) {
+        setComparisonSeries(cached)
         return
       }
 
@@ -2325,6 +2704,7 @@ function App() {
         compareTimeframe,
       )
       setComparisonSeries(rows)
+      writeDataCache(cacheKey, rows)
       setIsComparisonLoading(false)
     }
 
@@ -2333,7 +2713,7 @@ function App() {
     return () => {
       isCurrent = false
     }
-  }, [realm, comparisonSelections, compareMetric, compareMode, compareTimeframe])
+  }, [realm, comparisonSelections, compareMetric, compareMode, compareTimeframe, dataRefreshToken])
 
   useEffect(() => {
     let isCurrent = true
@@ -2343,6 +2723,13 @@ function App() {
         comparisonSelections.length > 0
           ? Array.from(new Set(comparisonSelections.map((selection) => selection.realm)))
           : [selectedComparisonRealm]
+      const cacheKey = `comparison-context:${realmIds.join(',')}:${comparisonDateWindow.startDate}:${comparisonDateWindow.endDate}`
+      const cached = readDataCache<ChartContext>(cacheKey)
+      if (cached) {
+        setComparisonContext(cached)
+        return
+      }
+
       const context = await loadChartContext(
         realmIds,
         comparisonDateWindow.startDate,
@@ -2350,6 +2737,7 @@ function App() {
       )
       if (isCurrent) {
         setComparisonContext(context)
+        writeDataCache(cacheKey, context)
       }
     }
 
@@ -2363,6 +2751,7 @@ function App() {
     comparisonSelections,
     comparisonDateWindow.startDate,
     comparisonDateWindow.endDate,
+    dataRefreshToken,
   ])
 
   function addComparisonSelection() {
@@ -2390,7 +2779,7 @@ function App() {
     const option = resourceOptions.find((resource) => resource.resource_id === resourceId)
     if (!option) return
 
-    const key = `r${selectedComparisonRealm}r${resourceId}q${selectedQuality}`
+    const key = `r${selectedComparisonRealm}r${resourceId}q${resourceQualityKey(selectedQuality)}`
     if (comparisonSelections.some((selection) => selection.key === key)) {
       return
     }
@@ -2516,6 +2905,13 @@ function App() {
     setIsMobileNavOpen(false)
   }
 
+  function refreshMarketData() {
+    clearDataCache()
+    setDataRefreshToken((current) => current + 1)
+  }
+
+  const isAnyMarketDataLoading = isLoading || isDashboardLoading || isComparisonLoading
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -2532,6 +2928,15 @@ function App() {
             type="button"
           >
             <CircleHelp size={18} />
+          </button>
+          <button
+            aria-label="Refresh market data"
+            className="icon-button"
+            onClick={refreshMarketData}
+            title="Refresh market data"
+            type="button"
+          >
+            <RefreshCw className={isAnyMarketDataLoading ? 'spin' : ''} size={18} />
           </button>
           <button
             aria-label={theme === 'dark' ? 'Use light mode' : 'Use dark mode'}
@@ -2675,10 +3080,7 @@ function App() {
               <p className="eyebrow">Daily Brief</p>
               <h2>Overall Market</h2>
             </div>
-            <span className="loading-state">
-              <RefreshCw className={isDashboardLoading ? 'spin' : ''} size={15} />
-              {isDashboardLoading ? 'Refreshing' : 'Ready'}
-            </span>
+            <RefreshProgress active={isDashboardLoading} />
           </div>
 
           <div className="market-summary-grid">
@@ -2730,7 +3132,7 @@ function App() {
                   <p className="eyebrow">{realms[signal.realm]}</p>
                   <h2>{signal.title}</h2>
                   <strong>{signal.name}</strong>
-                  <p>{signal.detail}</p>
+                  <p><DashboardDetail text={signal.detail} tone={signal.tone} /></p>
                   {(signal.winner || signal.loser || signal.beneficiary) && (
                     <div className="impact-pills">
                       {signal.winner && <span className="winner">Winner: {signal.winner}</span>}
@@ -2779,7 +3181,9 @@ function App() {
                   <div>
                     <p className="eyebrow">{realms[item.realm]}</p>
                     <strong>{item.name}</strong>
-                    <span>{item.title}: {item.detail}</span>
+                    <span className="technical-detail">
+                      <span className="dashboard-token">{item.title}</span>: <DashboardDetail text={item.detail} tone={item.tone} />
+                    </span>
                   </div>
                   <div className="dashboard-card-side">
                     <MiniChart data={item.series} technical={item.technical} tone={item.tone} />
@@ -3080,8 +3484,13 @@ function App() {
                   Quality
                   <select
                     value={selectedQuality}
-                    onChange={(event) => setSelectedQuality(Number(event.target.value))}
+                    onChange={(event) =>
+                      setSelectedQuality(
+                        event.target.value === 'weighted' ? 'weighted' : Number(event.target.value),
+                      )
+                    }
                   >
+                    <option value="weighted">Weighted qualities</option>
                     {qualityLevels.map((quality) => (
                       <option key={quality} value={quality}>
                         Q{quality}
