@@ -33,7 +33,10 @@ import {
 import {
   Area,
   AreaChart,
+  Bar,
+  Brush,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
   LineChart as RechartsLineChart,
@@ -199,6 +202,7 @@ type MarketDailyRow = {
 type ComparisonPoint = {
   date: string
   value: number
+  volume?: number
 }
 
 type ResourceComparisonSelection = {
@@ -270,6 +274,7 @@ type ChartFilters = {
   showContests: boolean
   showOrders: boolean
   showTechnicals: boolean
+  showVolume: boolean
 }
 
 type TourStep = {
@@ -405,6 +410,8 @@ const changelogEntries: ChangelogEntry[] = [
       'Expanded comparison chart timeframes with 14D, 1M, 2M, 5M, 1Y, and All views.',
       'Added government orders as dashboard demand catalysts.',
       'Added government order chart overlays and tooltip context.',
+      'Added chart brush controls and optional resource volume bars in comparisons.',
+      'Stabilized percent-change baselines for market-value comparisons.',
     ],
   },
   {
@@ -602,7 +609,7 @@ type CachedValue<T> = {
   value: T
 }
 
-const dataCachePrefix = 'simco-data-cache:v4:'
+const dataCachePrefix = 'simco-data-cache:v5:'
 
 function latestUpdateCycleKey(now = new Date()) {
   // The collector starts at 01:20 UTC, but cache should expire when new data is expected to be visible.
@@ -1136,6 +1143,21 @@ function median(values: number[]) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
 
+function stablePercentBaselineIndex(rows: ComparisonPoint[]) {
+  const positiveValues = rows.map((row) => row.value).filter((value) => Number.isFinite(value) && value > 0)
+  if (!positiveValues.length) {
+    return -1
+  }
+
+  const typicalValue = median(positiveValues)
+  const minimumBaseline = typicalValue * 0.2
+  const stableIndex = rows.findIndex((row) => Number.isFinite(row.value) && row.value >= minimumBaseline)
+
+  return stableIndex >= 0
+    ? stableIndex
+    : rows.findIndex((row) => Number.isFinite(row.value) && row.value > 0)
+}
+
 async function loadResourceMiniSeries(
   realm: RealmId,
   resourceId: number,
@@ -1587,7 +1609,9 @@ function buildComparisonRows(
   const dateMap = new Map<string, ComparisonDatum>()
 
   for (const selection of selections) {
-    const rows = filterByTimeframe(seriesByKey.get(selection.key) ?? [], timeframe)
+    const timeframeRows = filterByTimeframe(seriesByKey.get(selection.key) ?? [], timeframe)
+    const baselineIndex = mode === 'percent' ? stablePercentBaselineIndex(timeframeRows) : 0
+    const rows = baselineIndex > 0 ? timeframeRows.slice(baselineIndex) : timeframeRows
     const baseline = rows.find((row) => row.value > 0)?.value ?? 0
 
     for (const row of rows) {
@@ -1598,6 +1622,9 @@ function buildComparisonRows(
       const datum = dateMap.get(row.date) ?? { date: row.date, label }
       const rawValue = Number(row.value)
       datum[selection.key] = mode === 'percent' && baseline > 0 ? (rawValue / baseline - 1) * 100 : rawValue
+      if (typeof row.volume === 'number' && Number.isFinite(row.volume)) {
+        datum[`${selection.key}__volume`] = row.volume
+      }
       dateMap.set(row.date, datum)
     }
   }
@@ -2192,7 +2219,10 @@ function ChartTooltip({
       {payload.map((item) => (
         <span key={`${item.name}-${item.value}`}>
           <i style={{ background: item.color }} />
-          {String(item.name ?? valueLabel)}: {formatNumber(Number(item.value))}
+          {String(item.name ?? valueLabel)}:{' '}
+          {String(item.name ?? '').toLowerCase().includes('volume')
+            ? formatCompact(Number(item.value))
+            : formatNumber(Number(item.value))}
         </span>
       ))}
       {eventsByRealm.length > 0 && (
@@ -2562,6 +2592,7 @@ function App() {
   const [showContests, setShowContests] = useState(Boolean(storedChartFilters.showContests))
   const [showOrders, setShowOrders] = useState(Boolean(storedChartFilters.showOrders))
   const [showTechnicals, setShowTechnicals] = useState(Boolean(storedChartFilters.showTechnicals))
+  const [showVolume, setShowVolume] = useState(Boolean(storedChartFilters.showVolume))
   const [overviewContext, setOverviewContext] = useState<ChartContext>({
     phases: [],
     events: [],
@@ -2610,6 +2641,33 @@ function App() {
   const activeComparisonDomain = useMemo(
     () => comparisonDomain(comparisonSeries, activeComparisonKeys),
     [comparisonSeries, activeComparisonKeys],
+  )
+  const volumeComparisonSelections = useMemo(
+    () =>
+      (comparisonSelections.length
+        ? comparisonSelections
+        : [
+            {
+              key: 'power',
+              kind: 'resource' as const,
+              realm: 0 as RealmId,
+              resourceName: 'Power',
+              quality: 2,
+              resourceId: 1,
+            },
+            {
+              key: 'steel',
+              kind: 'resource' as const,
+              realm: 0 as RealmId,
+              resourceName: 'Steel',
+              quality: 0,
+              resourceId: 43,
+            },
+          ]).filter((selection) => selection.kind === 'resource'),
+    [comparisonSelections, comparisonSeries],
+  )
+  const canShowComparisonVolume = volumeComparisonSelections.some((selection) =>
+    comparisonSeries.some((row) => typeof row[`${selection.key}__volume`] === 'number'),
   )
   const overviewDateWindow = useMemo(() => chartDateWindow(visibleSeries), [visibleSeries])
   const comparisonDateWindow = useMemo(() => chartDateWindow(comparisonSeries), [comparisonSeries])
@@ -2729,9 +2787,10 @@ function App() {
       showContests,
       showOrders,
       showTechnicals,
+      showVolume,
     }
     localStorage.setItem(chartFiltersKey, JSON.stringify(filters))
-  }, [showPhases, showEvents, showContests, showOrders, showTechnicals])
+  }, [showPhases, showEvents, showContests, showOrders, showTechnicals, showVolume])
 
   useEffect(() => {
     let isCurrent = true
@@ -2891,6 +2950,7 @@ function App() {
             : (await loadResourceMarketSeries(realm, selection)).map((row) => ({
                 date: row.date,
                 value: compareMetric === 'market_value' ? row.market_value : row.vwap,
+                volume: row.volume,
               })),
         ] as const),
       )
@@ -3221,6 +3281,13 @@ function App() {
         >
           Show Technicals
         </button>
+        <button
+          className={showVolume ? 'active' : ''}
+          onClick={() => setShowVolume((current) => !current)}
+          type="button"
+        >
+          Show Volume
+        </button>
       </section>
 
       <button
@@ -3504,7 +3571,7 @@ function App() {
 
               <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={visibleSeries} margin={{ top: 8, right: 18, left: 0, bottom: 0 }}>
+                  <AreaChart data={visibleSeries} margin={{ top: 8, right: 18, left: 0, bottom: 22 }}>
                     <defs>
                       <linearGradient id="indexFill" x1="0" x2="0" y1="0" y2="1">
                         <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28} />
@@ -3557,6 +3624,14 @@ function App() {
                       stroke="var(--accent)"
                       strokeWidth={3}
                       fill="url(#indexFill)"
+                    />
+                    <Brush
+                      dataKey="date"
+                      fill="var(--brush-track)"
+                      height={18}
+                      travellerWidth={8}
+                      tickFormatter={shortDateLabel}
+                      stroke="var(--brush-border)"
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -3828,7 +3903,7 @@ function App() {
 
           <div className="comparison-chart" style={{ height: comparisonHeight }}>
             <ResponsiveContainer width="100%" height="100%">
-              <RechartsLineChart data={comparisonSeries} margin={{ top: 12, right: 20, left: 4, bottom: 4 }}>
+              <ComposedChart data={comparisonSeries} margin={{ top: 12, right: 20, left: 4, bottom: 24 }}>
                 <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -3839,6 +3914,7 @@ function App() {
                   axisLine={false}
                 />
                 <YAxis
+                  yAxisId="value"
                   domain={activeComparisonDomain}
                   tickFormatter={(value) =>
                     compareMode === 'percent' ? `${Number(value).toFixed(0)}%` : formatCompact(Number(value))
@@ -3846,6 +3922,12 @@ function App() {
                   tickLine={false}
                   axisLine={false}
                   width={72}
+                />
+                <YAxis
+                  yAxisId="volume"
+                  hide
+                  orientation="right"
+                  tickFormatter={(value) => formatCompact(Number(value))}
                 />
                 <Tooltip
                   content={(props) => (
@@ -3872,8 +3954,22 @@ function App() {
                       `comparison-technical-${item.key}`,
                       item.color,
                     ),
-                  )}
+                  )} 
                 <Legend />
+                {showVolume &&
+                  canShowComparisonVolume &&
+                  volumeComparisonSelections.map((selection, index) => (
+                    <Bar
+                      dataKey={`${selection.key}__volume`}
+                      fill={comparisonColors[index % comparisonColors.length]}
+                      fillOpacity={0.18}
+                      isAnimationActive={false}
+                      key={`${selection.key}-volume`}
+                      name={`${comparisonLabel(selection)} volume`}
+                      radius={[3, 3, 0, 0]}
+                      yAxisId="volume"
+                    />
+                  ))}
                 {(comparisonSelections.length
                   ? comparisonSelections
                   : [
@@ -3907,9 +4003,18 @@ function App() {
                     stroke={comparisonColors[index % comparisonColors.length]}
                     strokeWidth={3}
                     type="monotone"
+                    yAxisId="value"
                   />
                 ))}
-              </RechartsLineChart>
+                <Brush
+                  dataKey="date"
+                  fill="var(--brush-track)"
+                  height={18}
+                  travellerWidth={8}
+                  tickFormatter={shortDateLabel}
+                  stroke="var(--brush-border)"
+                />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         </section>

@@ -1137,6 +1137,34 @@
   min-width: 0;
 }
 
+.chart-wrap,
+.comparison-chart {
+  --brush-track: color-mix(in srgb, var(--elevated) 82%, black);
+  --brush-border: color-mix(in srgb, var(--border) 85%, var(--accent));
+  --brush-window: color-mix(in srgb, var(--accent) 24%, transparent);
+  --brush-handle: color-mix(in srgb, var(--accent) 82%, var(--surface));
+}
+
+.recharts-brush .recharts-brush-slide {
+  fill: var(--brush-window);
+  fill-opacity: 1;
+}
+
+.recharts-brush .recharts-brush-traveller rect {
+  fill: var(--brush-handle);
+  stroke: var(--accent-strong);
+  rx: 2;
+}
+
+.recharts-brush .recharts-brush-traveller line {
+  stroke: color-mix(in srgb, var(--heading) 70%, transparent);
+}
+
+.recharts-brush text {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
 .metrics-panel {
   display: grid;
   gap: 1px;
