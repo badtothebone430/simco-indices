@@ -236,6 +236,19 @@
   background: var(--surface);
 }
 
+.update-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.update-note > div {
+  display: grid;
+  gap: 2px 8px;
+  grid-template-columns: auto auto auto;
+  align-items: baseline;
+}
+
 .update-note strong {
   color: var(--heading);
   font-variant-numeric: tabular-nums;
@@ -244,6 +257,18 @@
 .update-note small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.collection-notice {
+  max-width: 360px;
+  padding: 9px 12px;
+  border: 1px solid rgba(196, 122, 16, 0.45);
+  border-radius: 6px;
+  color: var(--warning);
+  background: rgba(196, 122, 16, 0.11);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
 }
 
 .status-dot {
@@ -267,6 +292,8 @@
 }
 
 .chart-overlay-controls {
+  position: relative;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -292,6 +319,7 @@
 
 .view-tabs {
   position: relative;
+  z-index: 6;
   display: inline-grid;
   grid-template-columns: repeat(5, minmax(118px, 1fr));
   gap: 4px;
@@ -450,6 +478,30 @@
 .signal-card p:not(.eyebrow) {
   margin: 0;
   color: var(--text);
+}
+
+.impact-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.impact-pills span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.impact-pills .winner {
+  color: var(--positive);
+  background: var(--phase-boom);
+}
+
+.impact-pills .loser {
+  color: var(--negative);
+  background: var(--phase-recession);
 }
 
 .technical-panel {
@@ -666,6 +718,8 @@
 }
 
 .overview-view {
+  position: relative;
+  z-index: 20;
   display: block;
 }
 
@@ -730,6 +784,7 @@
 
 .index-grid {
   position: relative;
+  z-index: 30;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
@@ -756,7 +811,7 @@
   position: absolute;
   right: 10px;
   bottom: calc(100% + 10px);
-  z-index: 20;
+  z-index: 2000;
   display: grid;
   gap: 5px;
   width: min(280px, calc(100vw - 32px));
@@ -1376,6 +1431,15 @@ tbody tr:hover {
   .status-strip,
   .update-note {
     white-space: normal;
+  }
+
+  .update-stack {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .collection-notice {
+    max-width: none;
   }
 
   .segmented-control,

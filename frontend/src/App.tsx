@@ -150,6 +150,8 @@ type DashboardSignal = {
   tone: 'positive' | 'negative' | 'neutral'
   series: MiniPoint[]
   target?: DashboardTarget
+  winner?: 'Producers' | 'Buyers'
+  loser?: 'Producers' | 'Buyers'
 }
 
 type DashboardTechnical = DashboardSignal & {
@@ -222,6 +224,7 @@ type TechnicalSignal = {
   demandZone?: [number, number]
   supplyZone?: [number, number]
   channel?: {
+    direction: 'ascending' | 'descending'
     upper: [number, number]
     lower: [number, number]
   }
@@ -299,7 +302,7 @@ const tourSteps: TourStep[] = [
     selector: '.signal-grid',
     view: 'dashboard',
     title: 'Daily signals',
-    body: 'The dashboard highlights the biggest market story and the most relevant resource to watch.',
+    body: 'The dashboard highlights the selected realm market story and resource to watch. Switch realms above to see the other realm picks.',
   },
   {
     selector: '.technical-panel',
@@ -372,6 +375,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Added useful tools tab with Coopers Tools and Simcotools links.',
       'Added small UI improvements and clearer site footer details.',
       'Made current basket tables scrollable with sticky headers.',
+      'Added index tooltips, favicon update, and dashboard signal refinements.',
     ],
   },
   {
@@ -409,7 +413,7 @@ const changelogEntries: ChangelogEntry[] = [
     title: 'Index expansion',
     items: [
       'Added SC-10, SC-30, SC-50, total market, equal-weight market, food, construction, research, and quality indices.',
-      'Added category index support for major resource groups.',
+      'Added sector index support for major resource groups.',
       'Added 30-day historical backfill support.',
       'Added daily GitHub Actions data collection workflow.',
     ],
@@ -471,49 +475,49 @@ const indexDefinitions: IndexDefinition[] = [
     code: 'agriculture_only',
     name: 'Agriculture',
     description: 'Agriculture resources weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'fashion_only',
     name: 'Fashion',
     description: 'Fashion resources weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'energy_only',
     name: 'Energy',
     description: 'Energy resources weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'electronics_only',
     name: 'Electronics',
     description: 'Electronics resources weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'automotive_only',
     name: 'Automotive',
     description: 'Automotive resources weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'aerospace_only',
     name: 'Aerospace',
     description: 'Aerospace resources weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'resources_only',
     name: 'Resources',
     description: 'Raw and industrial resource inputs weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'seasonal_only',
     name: 'Seasonal',
     description: 'Seasonal resources weighted by daily market activity.',
-    method: 'Category',
+    method: 'Sector',
   },
   {
     code: 'equal_weight_market',
@@ -701,6 +705,14 @@ function nextUpdateDate(now = new Date()) {
   }
 
   return next
+}
+
+function isCollectionWindow(now = new Date()) {
+  const fiveMinutes = 5 * 60 * 1000
+  const next = nextUpdateDate(now)
+  const previous = new Date(next)
+  previous.setUTCDate(previous.getUTCDate() - 1)
+  return next.getTime() - now.getTime() <= fiveMinutes || now.getTime() - previous.getTime() <= fiveMinutes
 }
 
 function formatCountdown(target: Date, now = new Date()) {
@@ -973,6 +985,8 @@ async function loadResourceSignal(realm: RealmId): Promise<DashboardSignal | nul
     detail: `${top.row.resource_name} ${direction} ${Math.abs(top.change * 100).toFixed(1)}% on the latest snapshot, with ${formatCompact(top.row.volume)} volume traded and ${formatCompact(top.row.market_value)} in VWAP-volume market value.`,
     tone: top.change >= 0 ? 'positive' : 'negative',
     series,
+    winner: top.change >= 0 ? 'Producers' : 'Buyers',
+    loser: top.change >= 0 ? 'Buyers' : 'Producers',
     target: {
       kind: 'resource',
       realm,
@@ -1117,38 +1131,47 @@ async function loadDashboard() {
     .filter((contest) => contest.end_at >= new Date().toISOString())
     .sort((a, b) => b.start_at.localeCompare(a.start_at))
 
-  const watchEvent = activeEvents[0]
-  const watchContest = activeContests[0]
-  const watchEventMini = watchEvent
-    ? await loadResourceMiniSeries(watchEvent.realm_id, watchEvent.resource_id)
-    : null
-  const watchContestMini = watchContest?.resource_id
-    ? await loadResourceMiniSeries(watchContest.realm_id, watchContest.resource_id)
-    : null
-  const watchSignal: DashboardSignal | null = watchEvent
-    ? {
-        title: watchEvent.speed_modifier < 0 ? 'Supply Pressure' : 'Production Boost',
-        name: watchEvent.resource_name,
-        realm: watchEvent.realm_id,
-        detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}`,
-        tone: watchEvent.speed_modifier >= 0 ? 'positive' : 'negative',
-        series: watchEventMini?.series ?? [],
-        target: {
-          kind: 'resource',
+  const watchSignals = await Promise.all(
+    ([0, 1] as RealmId[]).map(async (realmId) => {
+      const watchEvent = activeEvents.find((event) => event.realm_id === realmId)
+      const watchContest = activeContests.find((contest) => contest.realm_id === realmId)
+      const watchEventMini = watchEvent
+        ? await loadResourceMiniSeries(watchEvent.realm_id, watchEvent.resource_id)
+        : null
+      const watchContestMini = watchContest?.resource_id
+        ? await loadResourceMiniSeries(watchContest.realm_id, watchContest.resource_id)
+        : null
+
+      if (watchEvent) {
+        return {
+          title: watchEvent.speed_modifier < 0 ? 'Supply Pressure' : 'Production Boost',
+          name: watchEvent.resource_name,
           realm: watchEvent.realm_id,
-          resourceId: watchEvent.resource_id,
-          resourceName: watchEvent.resource_name,
-          quality: watchEventMini?.quality ?? 0,
-        },
+          detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}`,
+          tone: watchEvent.speed_modifier >= 0 ? 'positive' : 'negative',
+          series: watchEventMini?.series ?? [],
+          winner: watchEvent.speed_modifier < 0 ? 'Producers' : 'Buyers',
+          loser: watchEvent.speed_modifier < 0 ? 'Buyers' : 'Producers',
+          target: {
+            kind: 'resource',
+            realm: watchEvent.realm_id,
+            resourceId: watchEvent.resource_id,
+            resourceName: watchEvent.resource_name,
+            quality: watchEventMini?.quality ?? 0,
+          },
+        } satisfies DashboardSignal
       }
-    : watchContest
-      ? {
+
+      if (watchContest) {
+        return {
           title: 'Contest Watch',
           name: watchContest.resource_name ?? watchContest.name,
           realm: watchContest.realm_id,
           detail: `${watchContest.name} is active in ${realms[watchContest.realm_id]}, affecting ${watchContest.resource_name ?? 'a contest target'}. Contest demand may push attention and liquidity toward the target while it is active.`,
           tone: 'neutral',
           series: watchContestMini?.series ?? [],
+          winner: 'Producers',
+          loser: 'Buyers',
           target: watchContest.resource_id && watchContest.resource_name
             ? {
                 kind: 'resource',
@@ -1158,16 +1181,16 @@ async function loadDashboard() {
                 quality: watchContestMini?.quality ?? 0,
               }
             : undefined,
-        }
-      : null
+        } satisfies DashboardSignal
+      }
+
+      return null
+    }),
+  )
 
   return {
     markets: marketSeries.filter(Boolean) as DashboardMarket[],
-    signals: [resourceSignals.filter(Boolean).sort((a, b) => {
-      const aMagnitude = Number(a?.detail.match(/([\d.]+)%/)?.[1] ?? 0)
-      const bMagnitude = Number(b?.detail.match(/([\d.]+)%/)?.[1] ?? 0)
-      return bMagnitude - aMagnitude
-    })[0], watchSignal].filter(Boolean) as DashboardSignal[],
+    signals: [...resourceSignals, ...watchSignals].filter(Boolean) as DashboardSignal[],
     technicals: technicalSignals.filter(Boolean) as DashboardTechnical[],
   }
 }
@@ -1256,6 +1279,20 @@ function comparisonDomain(rows: ComparisonDatum[], keys: string[]) {
   return [min - padding, max + padding] as const
 }
 
+function valueDomain(values: number[]) {
+  const finiteValues = values.filter((value) => Number.isFinite(value))
+  if (!finiteValues.length) {
+    return ['auto', 'auto'] as const
+  }
+
+  const min = Math.min(...finiteValues)
+  const max = Math.max(...finiteValues)
+  const range = max - min
+  const padding = range > 0 ? range * 0.06 : Math.max(Math.abs(max) * 0.06, 1)
+
+  return [min - padding, max + padding] as const
+}
+
 function technicalRowsFromSeries(rows: Array<{ date: string; value: number }>): TechnicalPoint[] {
   return rows
     .map((row) => ({ date: row.date, value: Number(row.value) }))
@@ -1315,6 +1352,7 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
   const channel =
     channelRange > 0
       ? {
+          direction: slope >= 0 ? 'ascending' as const : 'descending' as const,
           upper: [intercept + upperOffset, intercept + slope * (rows.length - 1) + upperOffset] as [number, number],
           lower: [intercept + lowerOffset, intercept + slope * (rows.length - 1) + lowerOffset] as [number, number],
         }
@@ -1682,10 +1720,10 @@ function renderTechnicalOverlays(
             ifOverflow="visible"
             key={`${keyPrefix}-channel-upper`}
             label={{
-              value: signal.type === 'ascending-channel' ? 'Ascending channel' : 'Descending channel',
+              value: signal.channel.direction === 'ascending' ? 'Ascending channel' : 'Descending channel',
               fill: color,
               fontSize: 11,
-              position: 'insideTopRight',
+              position: 'insideBottomRight',
             }}
             segment={[
               { x: startDate, y: signal.channel.upper[0] },
@@ -2020,6 +2058,7 @@ function App() {
   })
   const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
+  const [showCollectionNotice, setShowCollectionNotice] = useState(() => isCollectionWindow())
   const [showTour, setShowTour] = useState(() => localStorage.getItem(tourDismissedKey) !== 'true')
   const [tourStepIndex, setTourStepIndex] = useState(0)
 
@@ -2058,6 +2097,14 @@ function App() {
     () => contextForSelections(comparisonContext, comparisonSelections),
     [comparisonContext, comparisonSelections],
   )
+  const activeDashboardSignals = useMemo(
+    () => dashboardSignals.filter((signal) => signal.realm === realm),
+    [dashboardSignals, realm],
+  )
+  const activeDashboardTechnicals = useMemo(
+    () => dashboardTechnicals.filter((signal) => signal.realm === realm),
+    [dashboardTechnicals, realm],
+  )
   const overviewTechnicalRows = useMemo(() => technicalRowsFromSeries(visibleSeries), [visibleSeries])
   const overviewTechnicalSignal = useMemo(
     () => analyzeTechnicals(overviewTechnicalRows),
@@ -2065,17 +2112,19 @@ function App() {
   )
   const comparisonTechnicals = useMemo(
     () =>
-      activeComparisonKeys
-        .map((key, index) => {
-          const rows = technicalRowsFromComparison(comparisonSeries, key, compareTimeframe)
-          return {
-            key,
-            rows,
-            color: comparisonColors[index % comparisonColors.length],
-            signal: analyzeTechnicals(rows),
-          }
-        })
-        .filter((item) => item.signal),
+      activeComparisonKeys.length >= 2
+        ? []
+        : activeComparisonKeys
+            .map((key, index) => {
+              const rows = technicalRowsFromComparison(comparisonSeries, key, compareTimeframe)
+              return {
+                key,
+                rows,
+                color: comparisonColors[index % comparisonColors.length],
+                signal: analyzeTechnicals(rows),
+              }
+            })
+            .filter((item) => item.signal),
     [activeComparisonKeys, comparisonSeries, compareTimeframe],
   )
   useEffect(() => {
@@ -2088,6 +2137,7 @@ function App() {
       const next = nextUpdateDate()
       setNextUpdate(next)
       setUpdateCountdown(formatCountdown(next))
+      setShowCollectionNotice(isCollectionWindow())
     }
 
     refreshCountdown()
@@ -2506,11 +2556,20 @@ function App() {
             </button>
           ))}
         </div>
-        <div className="update-note">
-          <CalendarClock size={16} />
-          <span>Next update in</span>
-          <strong>{updateCountdown}</strong>
-          <small>{nextUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+        <div className="update-stack">
+          <div className="update-note">
+            <CalendarClock size={16} />
+            <div>
+              <span>Next update in</span>
+              <strong>{updateCountdown}</strong>
+              <small>{nextUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+            </div>
+          </div>
+          {showCollectionNotice && (
+            <div className="collection-notice">
+              Daily collection is running around 1:30 UTC; visible changes may arrive a little later.
+            </div>
+          )}
         </div>
       </section>
 
@@ -2635,11 +2694,11 @@ function App() {
           </div>
 
           <div className="signal-grid">
-            {(dashboardSignals.length ? dashboardSignals : [
+            {(activeDashboardSignals.length ? activeDashboardSignals : [
               {
                 title: 'Resource of the Day',
                 name: 'Waiting for data',
-                realm: 0 as RealmId,
+                realm,
                 detail: 'The dashboard will highlight market moves after the latest database snapshot loads.',
                 tone: 'neutral' as const,
                 series: [],
@@ -2651,6 +2710,12 @@ function App() {
                   <h2>{signal.title}</h2>
                   <strong>{signal.name}</strong>
                   <p>{signal.detail}</p>
+                  {signal.winner && signal.loser && (
+                    <div className="impact-pills">
+                      <span className="winner">Winner: {signal.winner}</span>
+                      <span className="loser">Loser: {signal.loser}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="dashboard-card-side">
                   <MiniChart data={signal.series} tone={signal.tone} />
@@ -2676,11 +2741,11 @@ function App() {
               </div>
             </div>
             <div className="technical-grid">
-              {(dashboardTechnicals.length ? dashboardTechnicals : [
+              {(activeDashboardTechnicals.length ? activeDashboardTechnicals : [
                 {
                   title: 'Waiting for setup',
                   name: 'No signal yet',
-                  realm: 0 as RealmId,
+                  realm,
                   detail: 'The dashboard will highlight a resource when enough technical history is available.',
                   tone: 'neutral' as const,
                   series: [],
@@ -2815,13 +2880,15 @@ function App() {
                     <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
                     <XAxis
                       dataKey="date"
+                      interval="preserveStartEnd"
                       minTickGap={28}
                       tickFormatter={shortDateLabel}
                       tickLine={false}
                       axisLine={false}
                     />
                     <YAxis
-                      domain={['dataMin - 20', 'dataMax + 20']}
+                      allowDecimals
+                      domain={valueDomain(visibleSeries.map((point) => point.value))}
                       tickFormatter={(value) => formatNumber(Number(value))}
                       tickLine={false}
                       axisLine={false}
@@ -3116,6 +3183,7 @@ function App() {
                 <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
                 <XAxis
                   dataKey="date"
+                  interval="preserveStartEnd"
                   minTickGap={24}
                   tickFormatter={shortDateLabel}
                   tickLine={false}
