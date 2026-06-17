@@ -14,6 +14,7 @@ import {
   Globe2,
   Hammer,
   LineChart as LineChartIcon,
+  Menu,
   Moon,
   Plus,
   RefreshCw,
@@ -151,7 +152,8 @@ type DashboardSignal = {
   series: MiniPoint[]
   target?: DashboardTarget
   winner?: 'Producers' | 'Buyers'
-  loser?: 'Producers' | 'Buyers'
+  loser?: 'Producers' | 'Buyers' | 'Buyers & Producers'
+  beneficiary?: 'Rival industries'
 }
 
 type DashboardTechnical = DashboardSignal & {
@@ -1150,8 +1152,9 @@ async function loadDashboard() {
           detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}`,
           tone: watchEvent.speed_modifier >= 0 ? 'positive' : 'negative',
           series: watchEventMini?.series ?? [],
-          winner: watchEvent.speed_modifier < 0 ? 'Producers' : 'Buyers',
-          loser: watchEvent.speed_modifier < 0 ? 'Buyers' : 'Producers',
+          winner: watchEvent.speed_modifier > 0 ? 'Buyers' : undefined,
+          loser: watchEvent.speed_modifier < 0 ? 'Buyers & Producers' : 'Producers',
+          beneficiary: watchEvent.speed_modifier < 0 ? 'Rival industries' : undefined,
           target: {
             kind: 'resource',
             realm: watchEvent.realm_id,
@@ -2061,6 +2064,7 @@ function App() {
   const [showCollectionNotice, setShowCollectionNotice] = useState(() => isCollectionWindow())
   const [showTour, setShowTour] = useState(() => localStorage.getItem(tourDismissedKey) !== 'true')
   const [tourStepIndex, setTourStepIndex] = useState(0)
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
 
   const qualityDefinitions = qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch))
   const allIndexDefinitions = useMemo(
@@ -2100,10 +2104,6 @@ function App() {
   const activeDashboardSignals = useMemo(
     () => dashboardSignals.filter((signal) => signal.realm === realm),
     [dashboardSignals, realm],
-  )
-  const activeDashboardTechnicals = useMemo(
-    () => dashboardTechnicals.filter((signal) => signal.realm === realm),
-    [dashboardTechnicals, realm],
   )
   const overviewTechnicalRows = useMemo(() => technicalRowsFromSeries(visibleSeries), [visibleSeries])
   const overviewTechnicalSignal = useMemo(
@@ -2510,6 +2510,11 @@ function App() {
     setActiveView('compare')
   }
 
+  function selectView(view: AppView) {
+    setActiveView(view)
+    setIsMobileNavOpen(false)
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -2604,10 +2609,25 @@ function App() {
         </button>
       </section>
 
-      <nav className={`view-tabs ${activeView}`} aria-label="Views">
+      <button
+        aria-expanded={isMobileNavOpen}
+        aria-controls="primary-navigation"
+        className="mobile-menu-button"
+        onClick={() => setIsMobileNavOpen((current) => !current)}
+        type="button"
+      >
+        <Menu size={18} />
+        Menu
+      </button>
+
+      <nav
+        className={`view-tabs ${activeView} ${isMobileNavOpen ? 'open' : ''}`}
+        id="primary-navigation"
+        aria-label="Views"
+      >
         <button
           className={activeView === 'dashboard' ? 'active' : ''}
-          onClick={() => setActiveView('dashboard')}
+          onClick={() => selectView('dashboard')}
           type="button"
         >
           <Activity size={16} />
@@ -2615,7 +2635,7 @@ function App() {
         </button>
         <button
           className={activeView === 'overview' ? 'active' : ''}
-          onClick={() => setActiveView('overview')}
+          onClick={() => selectView('overview')}
           type="button"
         >
           <LineChartIcon size={16} />
@@ -2623,7 +2643,7 @@ function App() {
         </button>
         <button
           className={activeView === 'compare' ? 'active' : ''}
-          onClick={() => setActiveView('compare')}
+          onClick={() => selectView('compare')}
           type="button"
         >
           <BarChart3 size={16} />
@@ -2631,7 +2651,7 @@ function App() {
         </button>
         <button
           className={activeView === 'tools' ? 'active' : ''}
-          onClick={() => setActiveView('tools')}
+          onClick={() => selectView('tools')}
           type="button"
         >
           <Hammer size={16} />
@@ -2639,7 +2659,7 @@ function App() {
         </button>
         <button
           className={activeView === 'changelog' ? 'active' : ''}
-          onClick={() => setActiveView('changelog')}
+          onClick={() => selectView('changelog')}
           type="button"
         >
           <FileText size={16} />
@@ -2710,10 +2730,11 @@ function App() {
                   <h2>{signal.title}</h2>
                   <strong>{signal.name}</strong>
                   <p>{signal.detail}</p>
-                  {signal.winner && signal.loser && (
+                  {(signal.winner || signal.loser || signal.beneficiary) && (
                     <div className="impact-pills">
-                      <span className="winner">Winner: {signal.winner}</span>
-                      <span className="loser">Loser: {signal.loser}</span>
+                      {signal.winner && <span className="winner">Winner: {signal.winner}</span>}
+                      {signal.loser && <span className="loser">Loser: {signal.loser}</span>}
+                      {signal.beneficiary && <span className="beneficiary">Winner: {signal.beneficiary}</span>}
                     </div>
                   )}
                 </div>
@@ -2741,7 +2762,7 @@ function App() {
               </div>
             </div>
             <div className="technical-grid">
-              {(activeDashboardTechnicals.length ? activeDashboardTechnicals : [
+              {(dashboardTechnicals.length ? dashboardTechnicals : [
                 {
                   title: 'Waiting for setup',
                   name: 'No signal yet',

@@ -331,6 +331,22 @@
   --active-tab: 0;
 }
 
+.mobile-menu-button {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--heading);
+  background: var(--surface);
+  cursor: pointer;
+  font-weight: 900;
+}
+
 .view-tabs.dashboard {
   --active-tab: 0;
 }
@@ -502,6 +518,11 @@
 .impact-pills .loser {
   color: var(--negative);
   background: var(--phase-recession);
+}
+
+.impact-pills .beneficiary {
+  color: var(--warning);
+  background: rgba(196, 122, 16, 0.12);
 }
 
 .technical-panel {
@@ -1459,10 +1480,39 @@ tbody tr:hover {
   }
 
   .segmented-control,
-  .view-tabs,
   .dashboard-grid {
     width: 100%;
     grid-template-columns: 1fr;
+  }
+
+  .mobile-menu-button {
+    display: inline-flex;
+  }
+
+  .view-tabs {
+    display: none;
+    width: 100%;
+    grid-template-columns: 1fr;
+    margin-bottom: 14px;
+  }
+
+  .view-tabs.open {
+    display: grid;
+  }
+
+  .view-tabs::before {
+    display: none;
+  }
+
+  .view-tabs button {
+    justify-content: flex-start;
+    min-height: 44px;
+    padding: 0 14px;
+  }
+
+  .view-tabs button.active {
+    background: var(--elevated);
+    box-shadow: var(--shadow-sm);
   }
 
   .components-panel {
@@ -1529,7 +1579,11 @@ tbody tr:hover {
   }
 
   .chart-wrap {
-    height: 320px;
+    height: 300px;
+  }
+
+  .comparison-chart {
+    height: min(380px, 72vh) !important;
   }
 
   .latest-value {
@@ -1538,6 +1592,21 @@ tbody tr:hover {
 }
 
 @media (max-width: 560px) {
+  .app-shell {
+    width: min(100% - 16px, 520px);
+    padding-top: 14px;
+  }
+
+  .topbar {
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .topbar h1 {
+    font-size: 34px;
+    line-height: 1;
+  }
+
   .index-grid {
     grid-template-columns: 1fr;
   }
@@ -1563,7 +1632,7 @@ tbody tr:hover {
   }
 
   .quality-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .toggle-row {
@@ -1572,6 +1641,38 @@ tbody tr:hover {
 
   .comparison-controls {
     grid-template-columns: 1fr;
+  }
+
+  .chart-overlay-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chart-overlay-controls button {
+    width: 100%;
+  }
+
+  .chart-wrap {
+    height: 260px;
+  }
+
+  .comparison-panel,
+  .tools-panel,
+  .changelog-panel {
+    padding: 14px;
+  }
+
+  .comparison-chart {
+    height: 320px !important;
+  }
+
+  table {
+    min-width: 640px;
+  }
+
+  th,
+  td {
+    padding: 11px 14px;
   }
 
   .dashboard-card-side {
