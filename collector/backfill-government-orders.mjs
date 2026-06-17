@@ -10,8 +10,8 @@ const BACKFILL_END_DATE = process.env.BACKFILL_END_DATE ?? new Date().toISOStrin
 const BACKFILL_REALM = process.env.BACKFILL_REALM ?? 'all'
 
 class SimcotoolsError extends Error {
-  constructor(path, status) {
-    super(`Simcotools ${path} failed with ${status}`)
+  constructor(path, status, body = '') {
+    super(`Simcotools ${path} failed with ${status}${body ? `: ${body}` : ''}`)
     this.status = status
   }
 }
@@ -78,7 +78,8 @@ async function fetchJson(path) {
       continue
     }
 
-    throw new SimcotoolsError(path, response.status)
+    const body = await response.text().catch(() => '')
+    throw new SimcotoolsError(path, response.status, body.slice(0, 500))
   }
 
   throw new SimcotoolsError(path, 0)
@@ -90,7 +91,7 @@ async function fetchGovernmentOrders(realm) {
   let lastPage = 1
 
   do {
-    const data = await fetchJson(`/v1/realms/${realm}/government-orders?sort=-created&page=${page}`)
+    const data = await fetchJson(`/v1/realms/${realm}/government-orders?sort=-id&page=${page}`)
     const pageOrders = data.orders ?? []
     orders.push(...pageOrders)
 
