@@ -326,8 +326,23 @@ async function fetchPrices(realm) {
   return data.prices ?? []
 }
 
+function rangeTimestampQuery() {
+  if (!BACKFILL_START_DATE || !BACKFILL_END_DATE) {
+    return ''
+  }
+
+  if (!isDateOnly(BACKFILL_START_DATE) || !isDateOnly(BACKFILL_END_DATE)) {
+    return ''
+  }
+
+  const start = Date.parse(`${BACKFILL_START_DATE}T00:00:00Z`)
+  const end = Date.parse(`${BACKFILL_END_DATE}T00:00:00Z`) + 86_400_000
+
+  return `?start=${start}&end=${end}`
+}
+
 async function fetchCandlesticks(realm, resourceId, quality) {
-  return fetchJson(`/v1/realms/${realm}/market/resources/${resourceId}/${quality}/candlesticks`)
+  return fetchJson(`/v1/realms/${realm}/market/resources/${resourceId}/${quality}/candlesticks${rangeTimestampQuery()}`)
 }
 
 function governmentOrderRows(realm, orders) {
