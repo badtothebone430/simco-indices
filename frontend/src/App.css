@@ -120,6 +120,10 @@
     height 220ms ease;
 }
 
+.guided-tour.interactive .tour-spotlight {
+  box-shadow: 0 0 0 6px rgba(85, 184, 177, 0.18);
+}
+
 .tour-card {
   display: grid;
   gap: 12px;
@@ -155,6 +159,13 @@
   border-bottom: 1px solid var(--border);
 }
 
+.tour-card.side::before {
+  top: 24px;
+  left: -9px;
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+
 .tour-count {
   color: var(--muted);
   font-size: 12px;
@@ -169,6 +180,16 @@
 .tour-card p {
   margin: 0;
   color: var(--text);
+}
+
+.tour-hint {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 198, 91, 0.32);
+  border-radius: 7px;
+  color: var(--heading);
+  background: rgba(255, 198, 91, 0.1);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .tour-actions {

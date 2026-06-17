@@ -279,15 +279,27 @@ type ChartFilters = {
 
 type TourStep = {
   selector: string
+  spotlightSelector?: string
   view: AppView
   title: string
   body: string
+  task?: 'energy-crude-q3' | 'crude-weighted'
+  interactive?: boolean
 }
 
 type ChangelogEntry = {
   date: string
   title: string
   items: string[]
+}
+
+type SpotlightRect = {
+  bottom: number
+  height: number
+  left: number
+  right: number
+  top: number
+  width: number
 }
 
 const comparisonStateKey = 'simco-comparison-state'
@@ -369,10 +381,28 @@ const tourSteps: TourStep[] = [
     body: 'Selected lines appear here. Remove items quickly or save the whole setup as a preset.',
   },
   {
-    selector: '.comparison-panel .chart-wrap',
+    selector: '.comparison-chart',
     view: 'compare',
     title: 'Compare movement',
     body: 'Switch between percent and price views, adjust the timeframe, and resize the comparison chart.',
+  },
+  {
+    selector: '.comparison-panel',
+    spotlightSelector: '.comparison-controls, .selection-strip, .comparison-chart',
+    view: 'compare',
+    title: 'Example: sector context',
+    body: 'Try it now: add the Energy index and Q3 Crude Oil to the comparison chart. This shows whether your resource is moving with or against the wider industry. Energy includes resources such as Power, Ethanol, Rocket fuel, Diesel, Petrol, Methane, and Crude Oil.',
+    task: 'energy-crude-q3',
+    interactive: true,
+  },
+  {
+    selector: '.comparison-panel',
+    spotlightSelector: '.comparison-controls, .selection-strip, .comparison-chart',
+    view: 'compare',
+    title: 'Example: weighted quality',
+    body: 'Now remove the broad Energy line and add Crude Oil with the weighted quality option. This combines all qualities into one resource line, weighted by traded activity, so you can see the whole Crude Oil market instead of only Q3.',
+    task: 'crude-weighted',
+    interactive: true,
   },
   {
     selector: '.tools-panel',
@@ -412,6 +442,8 @@ const changelogEntries: ChangelogEntry[] = [
       'Added government order chart overlays and tooltip context.',
       'Added chart brush controls and optional resource volume bars in comparisons.',
       'Stabilized percent-change baselines for market-value comparisons.',
+      'Added an interactive comparison example to the guided tour.',
+      'Improved sector baskets so every component row is visible in the current basket table.',
     ],
   },
   {
@@ -905,7 +937,7 @@ async function loadIndexComponents(realm: RealmId, indexCode: IndexCode, date: s
     .eq('index_code', indexCode)
     .eq('date', date)
     .order('weight', { ascending: false })
-    .limit(12)
+    .range(0, 4999)
 
   if (error || !data?.length) {
     return null
@@ -2445,30 +2477,58 @@ function RefreshProgress({ active }: { active: boolean }) {
   )
 }
 
+function combinedSpotlightRect(selector: string): SpotlightRect | null {
+  const targets = Array.from(document.querySelectorAll(selector))
+  if (!targets.length) {
+    return null
+  }
+
+  const rects = targets
+    .map((target) => target.getBoundingClientRect())
+    .filter((targetRect) => targetRect.width > 0 && targetRect.height > 0)
+
+  if (!rects.length) {
+    return null
+  }
+
+  const left = Math.min(...rects.map((targetRect) => targetRect.left))
+  const top = Math.min(...rects.map((targetRect) => targetRect.top))
+  const right = Math.max(...rects.map((targetRect) => targetRect.right))
+  const bottom = Math.max(...rects.map((targetRect) => targetRect.bottom))
+
+  return {
+    bottom,
+    height: bottom - top,
+    left,
+    right,
+    top,
+    width: right - left,
+  }
+}
+
 function GuidedTour({
   steps,
   stepIndex,
+  canContinue,
   onBack,
   onDismiss,
   onNext,
 }: {
   steps: TourStep[]
   stepIndex: number
+  canContinue: boolean
   onBack: () => void
   onDismiss: () => void
   onNext: () => void
 }) {
   const step = steps[stepIndex]
-  const [rect, setRect] = useState<DOMRect | null>(null)
+  const [rect, setRect] = useState<SpotlightRect | null>(null)
 
   useEffect(() => {
+    const spotlightSelector = step.spotlightSelector ?? step.selector
+
     function updateRect() {
-      const target = document.querySelector(step.selector)
-      if (!target) {
-        setRect(null)
-        return
-      }
-      setRect(target.getBoundingClientRect())
+      setRect(combinedSpotlightRect(spotlightSelector))
     }
 
     const target = document.querySelector(step.selector)
@@ -2482,7 +2542,7 @@ function GuidedTour({
       window.removeEventListener('resize', updateRect)
       window.removeEventListener('scroll', updateRect, true)
     }
-  }, [step.selector])
+  }, [step.selector, step.spotlightSelector])
 
   const padding = 10
   const spotlightStyle = rect
@@ -2493,20 +2553,34 @@ function GuidedTour({
         width: rect.width + padding * 2,
       }
     : undefined
+  const cardWidth = Math.min(340, window.innerWidth - 32)
+  const sidePlacement = step.interactive && rect && rect.right + 18 + cardWidth < window.innerWidth
   const cardStyle = rect
     ? {
-        left: Math.min(Math.max(rect.left, 16), window.innerWidth - 356),
-        top:
-          rect.bottom + 18 < window.innerHeight - 210
+        left: sidePlacement
+          ? rect.right + 18
+          : Math.min(Math.max(rect.left, 16), window.innerWidth - cardWidth - 16),
+        top: sidePlacement
+          ? Math.min(Math.max(rect.top, 16), window.innerHeight - 330)
+          : rect.bottom + 18 < window.innerHeight - 210
             ? rect.bottom + 18
             : Math.max(16, rect.top - 218),
       }
     : undefined
-  const cardPlacement = rect && rect.bottom + 18 < window.innerHeight - 210 ? 'below' : 'above'
+  const cardPlacement = sidePlacement
+    ? 'side'
+    : rect && rect.bottom + 18 < window.innerHeight - 210
+      ? 'below'
+      : 'above'
 
   return (
-    <div className="guided-tour" role="dialog" aria-modal="true" aria-labelledby="tour-title">
-      <div className="tour-scrim" />
+    <div
+      className={`guided-tour${step.interactive ? ' interactive' : ''}`}
+      role="dialog"
+      aria-modal={!step.interactive}
+      aria-labelledby="tour-title"
+    >
+      {!step.interactive && <div className="tour-scrim" />}
       <div className="tour-spotlight" style={spotlightStyle} />
       <section className={`tour-card ${cardPlacement}`} style={cardStyle}>
         <span className="tour-count">
@@ -2514,6 +2588,9 @@ function GuidedTour({
         </span>
         <h2 id="tour-title">{step.title}</h2>
         <p>{step.body}</p>
+        {step.interactive && !canContinue && (
+          <p className="tour-hint">Complete the example to continue, or use Back / Skip.</p>
+        )}
         <div className="tour-actions">
           <button className="ghost-button" onClick={onDismiss} type="button">
             Skip
@@ -2522,7 +2599,7 @@ function GuidedTour({
             <button className="ghost-button" disabled={stepIndex === 0} onClick={onBack} type="button">
               Back
             </button>
-            <button className="command-button" onClick={onNext} type="button">
+            <button className="command-button" disabled={!canContinue} onClick={onNext} type="button">
               {stepIndex === steps.length - 1 ? 'Done' : 'Next'}
             </button>
           </div>
@@ -3115,9 +3192,44 @@ function App() {
     setShowTour(true)
   }
 
+  function crudeOilOption() {
+    return resourceOptions.find((resource) => resource.name.trim().toLowerCase() === 'crude oil')
+  }
+
+  function tourTaskComplete(task: TourStep['task']) {
+    if (!task) return true
+    const crudeOil = crudeOilOption()
+    if (!crudeOil) return false
+
+    const hasEnergy = comparisonSelections.some(
+      (selection) => selection.kind === 'index' && selection.realm === 0 && selection.indexCode === 'energy_only',
+    )
+    const hasCrudeQ3 = comparisonSelections.some(
+      (selection) =>
+        selection.kind === 'resource' &&
+        selection.realm === 0 &&
+        selection.resourceId === crudeOil.resource_id &&
+        selection.quality === 3,
+    )
+    const hasWeightedCrude = comparisonSelections.some(
+      (selection) =>
+        selection.kind === 'resource' &&
+        selection.realm === 0 &&
+        selection.resourceId === crudeOil.resource_id &&
+        selection.quality === 'weighted',
+    )
+
+    if (task === 'energy-crude-q3') {
+      return hasEnergy && hasCrudeQ3
+    }
+
+    return hasWeightedCrude && !hasEnergy
+  }
+
   useEffect(() => {
     if (!showTour) return
-    setActiveView(tourSteps[tourStepIndex].view)
+    const step = tourSteps[tourStepIndex]
+    setActiveView(step.view)
   }, [showTour, tourStepIndex])
 
   function nextTourStep() {
@@ -3668,7 +3780,7 @@ function App() {
             <div className="panel-header compact">
               <div>
                 <p className="eyebrow">Current Basket</p>
-                <h2>Largest Components</h2>
+                <h2>All Components</h2>
               </div>
               <span className="loading-state">
                 <RefreshCw className={isLoading ? 'spin' : ''} size={15} />
@@ -4098,6 +4210,7 @@ function App() {
 
       {showTour && (
         <GuidedTour
+          canContinue={tourTaskComplete(tourSteps[tourStepIndex].task)}
           onBack={previousTourStep}
           onDismiss={dismissTour}
           onNext={nextTourStep}
