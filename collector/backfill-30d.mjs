@@ -330,12 +330,39 @@ async function fetchCandlesticks(realm, resourceId, quality) {
   return fetchJson(`/v1/realms/${realm}/market/resources/${resourceId}/${quality}/candlesticks`)
 }
 
+function governmentOrderRows(realm, orders) {
+  return orders.flatMap((order) => {
+    const createdAt = order.created
+    const daysToFulfill = Number(order.daysToFulfill ?? order.days_to_fulfill)
+    const dueAt =
+      createdAt && Number.isFinite(daysToFulfill)
+        ? new Date(new Date(createdAt).getTime() + daysToFulfill * 86_400_000).toISOString()
+        : null
+
+    return (order.resources ?? []).map((resource) => ({
+      realm_id: realm,
+      order_id: order.id,
+      project_name: order.projectName ?? order.project_name ?? 'Government order',
+      resource_id: resource.resourceId,
+      resource_name: resource.resourceName,
+      quality: resource.quality ?? 0,
+      days_to_fulfill: Number.isFinite(daysToFulfill) ? daysToFulfill : null,
+      created_at: createdAt,
+      due_at: dueAt,
+      raw: order,
+      updated_at: new Date().toISOString(),
+    }))
+  })
+}
+
 async function collectRealmContext(supabase, realm) {
   const phases = await fetchPaged(`/v1/realms/${realm}/phases`, 'ranges')
   await sleep(RATE_LIMIT_DELAY_MS)
   const events = await fetchPaged(`/v1/realms/${realm}/events`, 'events')
   await sleep(RATE_LIMIT_DELAY_MS)
   const contests = await fetchPaged(`/v1/realms/${realm}/contests`, 'contests')
+  await sleep(RATE_LIMIT_DELAY_MS)
+  const governmentOrders = await fetchPaged(`/v1/realms/${realm}/government-orders`, 'orders')
 
   await upsertInChunks(
     supabase,
@@ -391,10 +418,18 @@ async function collectRealmContext(supabase, realm) {
     'realm_id,contest_id',
   )
 
+  await upsertInChunks(
+    supabase,
+    'realm_government_orders',
+    governmentOrderRows(realm, governmentOrders),
+    'realm_id,order_id,resource_id,quality',
+  )
+
   return {
     phases: phases.length,
     events: events.length,
     contests: contests.length,
+    governmentOrders: governmentOrders.length,
   }
 }
 

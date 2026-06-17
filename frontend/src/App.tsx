@@ -54,7 +54,7 @@ type AppView = 'dashboard' | 'overview' | 'compare' | 'tools' | 'changelog'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
-type Timeframe = '7d' | '14d' | '30d' | 'all'
+type Timeframe = '7d' | '14d' | '1m' | '2m' | '5m' | '1y' | 'all'
 type ResourceQualitySelection = number | 'weighted'
 
 type IndexDefinition = {
@@ -111,10 +111,23 @@ type RealmContest = {
   end_at: string
 }
 
+type RealmGovernmentOrder = {
+  realm_id: RealmId
+  order_id: number
+  project_name: string
+  resource_id: number
+  resource_name: string
+  quality: number
+  days_to_fulfill: number | null
+  created_at: string
+  due_at: string | null
+}
+
 type ChartContext = {
   phases: PhaseRange[]
   events: RealmEvent[]
   contests: RealmContest[]
+  governmentOrders: RealmGovernmentOrder[]
 }
 
 type DashboardMarket = {
@@ -255,6 +268,7 @@ type ChartFilters = {
   showPhases: boolean
   showEvents: boolean
   showContests: boolean
+  showOrders: boolean
   showTechnicals: boolean
 }
 
@@ -293,7 +307,7 @@ const tourSteps: TourStep[] = [
     selector: '.chart-overlay-controls',
     view: 'dashboard',
     title: 'Layer context',
-    body: 'Toggle phases, events, contests, and technicals on charts whenever you need more context.',
+    body: 'Toggle phases, events, contests, government orders, and technicals on charts whenever you need more context.',
   },
   {
     selector: '.market-summary-grid',
@@ -388,7 +402,9 @@ const changelogEntries: ChangelogEntry[] = [
       'Improved dashboard number precision and highlighted key values in signal text.',
       'Added smoother dashboard refresh progress feedback.',
       'Weighted dashboard event picks toward newer speed modifiers.',
-      'Updated comparison chart timeframes with a 14D option and removed 90D.',
+      'Expanded comparison chart timeframes with 14D, 1M, 2M, 5M, 1Y, and All views.',
+      'Added government orders as dashboard demand catalysts.',
+      'Added government order chart overlays and tooltip context.',
     ],
   },
   {
@@ -586,7 +602,7 @@ type CachedValue<T> = {
   value: T
 }
 
-const dataCachePrefix = 'simco-data-cache:v3:'
+const dataCachePrefix = 'simco-data-cache:v4:'
 
 function latestUpdateCycleKey(now = new Date()) {
   // The collector starts at 01:20 UTC, but cache should expire when new data is expected to be visible.
@@ -812,14 +828,24 @@ function formatCountdown(target: Date, now = new Date()) {
 function timeframeDays(timeframe: Timeframe) {
   if (timeframe === '7d') return 7
   if (timeframe === '14d') return 14
-  if (timeframe === '30d') return 30
+  if (timeframe === '1m') return 30
+  if (timeframe === '2m') return 60
+  if (timeframe === '5m') return 150
+  if (timeframe === '1y') return 365
   return null
 }
 
 function normalizeTimeframe(timeframe: unknown): Timeframe {
-  return timeframe === '7d' || timeframe === '14d' || timeframe === '30d' || timeframe === 'all'
+  if (timeframe === '30d' || timeframe === '90d') return '1m'
+  return timeframe === '7d' ||
+    timeframe === '14d' ||
+    timeframe === '1m' ||
+    timeframe === '2m' ||
+    timeframe === '5m' ||
+    timeframe === '1y' ||
+    timeframe === 'all'
     ? timeframe
-    : '30d'
+    : '1m'
 }
 
 function filterByTimeframe<T extends { date: string }>(rows: T[], timeframe: Timeframe) {
@@ -884,10 +910,10 @@ async function loadIndexComponents(realm: RealmId, indexCode: IndexCode, date: s
 async function loadChartContext(realmIds: RealmId[], startDate: string, endDate: string) {
   const supabase = getSupabase()
   if (!supabase || !realmIds.length || !startDate || !endDate) {
-    return { phases: [], events: [], contests: [] }
+    return { phases: [], events: [], contests: [], governmentOrders: [] }
   }
 
-  const [phases, events, contests] = await Promise.all([
+  const [phases, events, contests, governmentOrders] = await Promise.all([
     supabase
       .from('realm_phases')
       .select('realm_id,phase,start_at,end_at')
@@ -907,12 +933,20 @@ async function loadChartContext(realmIds: RealmId[], startDate: string, endDate:
       .lte('start_at', `${endDate}T23:59:59Z`)
       .gte('end_at', `${startDate}T00:00:00Z`)
       .order('start_at', { ascending: false }),
+    supabase
+      .from('realm_government_orders')
+      .select('realm_id,order_id,project_name,resource_id,resource_name,quality,days_to_fulfill,created_at,due_at')
+      .in('realm_id', realmIds)
+      .lte('created_at', `${endDate}T23:59:59Z`)
+      .or(`due_at.gte.${startDate}T00:00:00Z,due_at.is.null`)
+      .order('created_at', { ascending: false }),
   ])
 
   return {
     phases: phases.error ? [] : (phases.data as PhaseRange[]),
     events: events.error ? [] : (events.data as RealmEvent[]),
     contests: contests.error ? [] : (contests.data as RealmContest[]),
+    governmentOrders: governmentOrders.error ? [] : (governmentOrders.data as RealmGovernmentOrder[]),
   }
 }
 
@@ -1047,6 +1081,27 @@ function eventAgeLabel(event: RealmEvent, now = new Date()) {
   if (ageDays === 1) return ' This modifier started yesterday, so it is still relatively fresh.'
   if (ageDays <= 7) return ` This modifier started ${ageDays} days ago, so some repricing may already be underway.`
   return ` This modifier started ${ageDays} days ago, so much of the direct price reaction may already be priced in.`
+}
+
+function governmentOrderFreshnessWeight(order: RealmGovernmentOrder, now = new Date()) {
+  const createdAt = new Date(order.created_at).getTime()
+  if (!Number.isFinite(createdAt)) {
+    return 0.2
+  }
+
+  const ageDays = Math.max(0, (now.getTime() - createdAt) / 86_400_000)
+  if (ageDays <= 1) return 1.25
+  if (ageDays <= 3) return 1
+  if (ageDays <= 7) return 0.6
+  return 0.25
+}
+
+function governmentOrderDetail(order: RealmGovernmentOrder) {
+  const dueText = order.due_at
+    ? ` due by ${formatDisplayDate(toDateOnly(order.due_at))}`
+    : ''
+
+  return `${order.project_name} includes a government order for ${order.resource_name} Q${order.quality} in ${realms[order.realm_id]}${dueText}. Government demand can pull liquidity toward the required resource while the order is active.`
 }
 
 function movementStoryScore(change: number, marketValue: number, volume: number, medianMarketValue: number, medianVolume: number) {
@@ -1344,10 +1399,14 @@ async function loadDashboard() {
   const activeContests = context.contests
     .filter((contest) => contest.end_at >= new Date().toISOString())
     .sort((a, b) => b.start_at.localeCompare(a.start_at))
+  const activeGovernmentOrders = context.governmentOrders
+    .filter((order) => !order.due_at || order.due_at >= new Date().toISOString())
+    .sort((a, b) => governmentOrderFreshnessWeight(b) - governmentOrderFreshnessWeight(a))
 
   const watchSignals = await Promise.all(
     ([0, 1] as RealmId[]).map(async (realmId) => {
       const watchEvent = activeEvents.find((event) => event.realm_id === realmId)
+      const watchGovernmentOrder = activeGovernmentOrders.find((order) => order.realm_id === realmId)
       const watchContest = activeContests.find((contest) => contest.realm_id === realmId)
       const watchEventMini = watchEvent && !isTransportEvent(watchEvent)
         ? await loadResourceMiniSeries(watchEvent.realm_id, watchEvent.resource_id)
@@ -1357,6 +1416,13 @@ async function loadDashboard() {
         : []
       const watchContestMini = watchContest?.resource_id
         ? await loadResourceMiniSeries(watchContest.realm_id, watchContest.resource_id)
+        : null
+      const watchGovernmentOrderMini = watchGovernmentOrder
+        ? await loadResourceMiniSeries(
+            watchGovernmentOrder.realm_id,
+            watchGovernmentOrder.resource_id,
+            watchGovernmentOrder.quality,
+          )
         : null
 
       if (watchEvent) {
@@ -1397,6 +1463,26 @@ async function loadDashboard() {
             resourceId: watchEvent.resource_id,
             resourceName: watchEvent.resource_name,
             quality: watchEventMini?.quality ?? 0,
+          },
+        } satisfies DashboardSignal
+      }
+
+      if (watchGovernmentOrder) {
+        return {
+          title: 'Government Order',
+          name: `${watchGovernmentOrder.resource_name} Q${watchGovernmentOrder.quality}`,
+          realm: watchGovernmentOrder.realm_id,
+          detail: governmentOrderDetail(watchGovernmentOrder),
+          tone: 'neutral',
+          series: watchGovernmentOrderMini?.series ?? [],
+          winner: 'Producers',
+          loser: 'Buyers',
+          target: {
+            kind: 'resource',
+            realm: watchGovernmentOrder.realm_id,
+            resourceId: watchGovernmentOrder.resource_id,
+            resourceName: watchGovernmentOrder.resource_name,
+            quality: watchGovernmentOrder.quality,
           },
         } satisfies DashboardSignal
       }
@@ -1751,6 +1837,10 @@ function contextForSelections(context: ChartContext, selections: ComparisonSelec
       if (!contest.resource_id) return false
       return resourceIdsByRealm.get(contest.realm_id)?.has(contest.resource_id) ?? false
     }),
+    governmentOrders: context.governmentOrders.filter((order) => {
+      if (hasIndexByRealm.has(order.realm_id)) return true
+      return resourceIdsByRealm.get(order.realm_id)?.has(order.resource_id) ?? false
+    }),
   }
 }
 
@@ -1784,8 +1874,11 @@ function contextItemsForDate(context: ChartContext, date: string) {
   const at = `${date}T12:00:00Z`
   const events = context.events.filter((event) => event.since <= at && event.until >= at)
   const contests = context.contests.filter((contest) => contest.start_at <= at && contest.end_at >= at)
+  const governmentOrders = context.governmentOrders.filter(
+    (order) => order.created_at <= at && (!order.due_at || order.due_at >= at),
+  )
 
-  return { events, contests }
+  return { events, contests, governmentOrders }
 }
 
 function hasMultipleRealms(context: ChartContext) {
@@ -1793,6 +1886,7 @@ function hasMultipleRealms(context: ChartContext) {
     ...context.phases.map((phase) => phase.realm_id),
     ...context.events.map((event) => event.realm_id),
     ...context.contests.map((contest) => contest.realm_id),
+    ...context.governmentOrders.map((order) => order.realm_id),
   ])
   return realmIds.size > 1
 }
@@ -1815,6 +1909,16 @@ function contestLineColor(contest: RealmContest) {
   return contest.realm_id === 1 ? 'var(--contest-border-alt)' : 'var(--contest-border)'
 }
 
+function orderLineColor(order: RealmGovernmentOrder) {
+  return order.realm_id === 1 ? 'var(--warning)' : 'var(--accent)'
+}
+
+function recentGovernmentOrders(orders: RealmGovernmentOrder[]) {
+  return [...orders]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, 4)
+}
+
 function topOverlayDy(row: number) {
   return 12 + row * 14
 }
@@ -1828,9 +1932,11 @@ function renderContextOverlays(
   showPhases: boolean,
   showEvents: boolean,
   showContests: boolean,
+  showOrders: boolean,
   keyPrefix: string,
 ) {
   const contests = recentContests(context.contests)
+  const orders = recentGovernmentOrders(context.governmentOrders)
   const eventGroups = groupedEvents(context.events)
   const multiRealm = hasMultipleRealms(context)
 
@@ -1918,6 +2024,37 @@ function renderContextOverlays(
             />,
           ]
         ))}
+      {showOrders &&
+        orders.flatMap((order, index) => {
+          const color = orderLineColor(order)
+          const label = `${multiRealm ? `${realms[order.realm_id]}: ` : ''}${order.project_name}`
+
+          return [
+            <ReferenceLine
+              ifOverflow="visible"
+              key={`${keyPrefix}-order-start-${order.realm_id}-${order.order_id}-${order.resource_id}-${order.quality}`}
+              label={{
+                value: label,
+                fill: color,
+                fontSize: 11,
+                dy: bottomOverlayDy(index + contests.length),
+                position: 'insideBottomLeft',
+              }}
+              stroke={color}
+              strokeDasharray="2 5"
+              x={toDateOnly(order.created_at)}
+            />,
+            order.due_at ? (
+              <ReferenceLine
+                ifOverflow="visible"
+                key={`${keyPrefix}-order-due-${order.realm_id}-${order.order_id}-${order.resource_id}-${order.quality}`}
+                stroke={color}
+                strokeDasharray="2 5"
+                x={toDateOnly(order.due_at)}
+              />
+            ) : null,
+          ]
+        })}
     </>
   )
 }
@@ -2029,7 +2166,7 @@ function ChartTooltip({
   }
 
   const dateLabel = String(label)
-  const { events, contests } = contextItemsForDate(context, dateLabel)
+  const { events, contests, governmentOrders } = contextItemsForDate(context, dateLabel)
   const eventsByRealm = ([0, 1] as RealmId[])
     .map((realmId) => ({
       realmId,
@@ -2042,6 +2179,12 @@ function ChartTooltip({
       contests: contests.filter((contest) => contest.realm_id === realmId),
     }))
     .filter((group) => group.contests.length > 0)
+  const ordersByRealm = ([0, 1] as RealmId[])
+    .map((realmId) => ({
+      realmId,
+      orders: governmentOrders.filter((order) => order.realm_id === realmId),
+    }))
+    .filter((group) => group.orders.length > 0)
 
   return (
     <div className="chart-tooltip">
@@ -2076,6 +2219,21 @@ function ChartTooltip({
               <em>{realms[group.realmId]}</em>
               {group.contests.slice(0, 2).map((contest) => (
                 <small key={contest.contest_id}>{contest.name}</small>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {ordersByRealm.length > 0 && (
+        <div className="tooltip-context">
+          <b>Government orders</b>
+          {ordersByRealm.map((group) => (
+            <div className="tooltip-realm-group" key={`orders-${group.realmId}`}>
+              <em>{realms[group.realmId]}</em>
+              {group.orders.slice(0, 4).map((order) => (
+                <small key={`${order.order_id}-${order.resource_id}-${order.quality}`}>
+                  {order.project_name}: {order.resource_name} Q{order.quality}
+                </small>
               ))}
             </div>
           ))}
@@ -2391,7 +2549,7 @@ function App() {
   const [compareMode, setCompareMode] = useState<CompareMode>(storedComparisonState.mode ?? 'percent')
   const [compareMetric, setCompareMetric] = useState<CompareMetric>(storedComparisonState.metric ?? 'vwap')
   const [compareTimeframe, setCompareTimeframe] = useState<Timeframe>(
-    normalizeTimeframe(storedComparisonState.timeframe),
+    normalizeTimeframe(storedComparisonState.timeframe ?? '1m'),
   )
   const [comparisonHeight, setComparisonHeight] = useState(storedComparisonState.height ?? 460)
   const [presetName, setPresetName] = useState('')
@@ -2402,16 +2560,19 @@ function App() {
   const [showPhases, setShowPhases] = useState(Boolean(storedChartFilters.showPhases))
   const [showEvents, setShowEvents] = useState(Boolean(storedChartFilters.showEvents))
   const [showContests, setShowContests] = useState(Boolean(storedChartFilters.showContests))
+  const [showOrders, setShowOrders] = useState(Boolean(storedChartFilters.showOrders))
   const [showTechnicals, setShowTechnicals] = useState(Boolean(storedChartFilters.showTechnicals))
   const [overviewContext, setOverviewContext] = useState<ChartContext>({
     phases: [],
     events: [],
     contests: [],
+    governmentOrders: [],
   })
   const [comparisonContext, setComparisonContext] = useState<ChartContext>({
     phases: [],
     events: [],
     contests: [],
+    governmentOrders: [],
   })
   const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
@@ -2566,10 +2727,11 @@ function App() {
       showPhases,
       showEvents,
       showContests,
+      showOrders,
       showTechnicals,
     }
     localStorage.setItem(chartFiltersKey, JSON.stringify(filters))
-  }, [showPhases, showEvents, showContests, showTechnicals])
+  }, [showPhases, showEvents, showContests, showOrders, showTechnicals])
 
   useEffect(() => {
     let isCurrent = true
@@ -3046,6 +3208,13 @@ function App() {
           Show Contests
         </button>
         <button
+          className={showOrders ? 'active' : ''}
+          onClick={() => setShowOrders((current) => !current)}
+          type="button"
+        >
+          Show Orders
+        </button>
+        <button
           className={showTechnicals ? 'active' : ''}
           onClick={() => setShowTechnicals((current) => !current)}
           type="button"
@@ -3368,7 +3537,14 @@ function App() {
                         />
                       )}
                     />
-                    {renderContextOverlays(overviewContext, showPhases, showEvents, showContests, 'overview')}
+                    {renderContextOverlays(
+                      overviewContext,
+                      showPhases,
+                      showEvents,
+                      showContests,
+                      showOrders,
+                      'overview',
+                    )}
                     {showTechnicals &&
                       renderTechnicalOverlays(
                         overviewTechnicalRows,
@@ -3572,7 +3748,10 @@ function App() {
               >
                 <option value="7d">7D</option>
                 <option value="14d">14D</option>
-                <option value="30d">30D</option>
+                <option value="1m">1M</option>
+                <option value="2m">2M</option>
+                <option value="5m">5M</option>
+                <option value="1y">1Y</option>
                 <option value="all">All</option>
               </select>
             </label>
@@ -3682,6 +3861,7 @@ function App() {
                   showPhases,
                   showEvents,
                   showContests,
+                  showOrders,
                   'comparison',
                 )}
                 {showTechnicals &&

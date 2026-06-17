@@ -1,0 +1,45 @@
+name: Backfill government orders
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "First order creation date to backfill, YYYY-MM-DD"
+        required: true
+      end_date:
+        description: "Last order creation date to backfill, YYYY-MM-DD"
+        required: true
+      realm:
+        description: "Realm to backfill: all, 0, or 1"
+        required: true
+        default: "all"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: collector
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: collector/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Backfill government orders
+        run: npm run backfill:orders
+        env:
+          BACKFILL_START_DATE: ${{ inputs.start_date }}
+          BACKFILL_END_DATE: ${{ inputs.end_date }}
+          BACKFILL_REALM: ${{ inputs.realm }}
+          SIMCO_SUPABASE_URL: ${{ secrets.SIMCO_SUPABASE_URL }}
+          SIMCO_SUPABASE_SECRET_KEY: ${{ secrets.SIMCO_SUPABASE_SECRET_KEY }}
