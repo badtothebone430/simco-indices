@@ -3437,8 +3437,8 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">SimCompanies Market Indices</p>
-          <h1>Realm-level resource market performance</h1>
+          <p className="eyebrow">Realm-level resource market performance</p>
+          <h1>SimCompanies Market Indices</h1>
         </div>
         <div className="topbar-actions">
           <button
@@ -4282,7 +4282,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.1.12</strong>
+              <strong>v1.1.13</strong>
             </div>
           </div>
 
