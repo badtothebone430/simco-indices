@@ -54,7 +54,7 @@ type AppView = 'dashboard' | 'overview' | 'compare' | 'tools' | 'changelog'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
-type Timeframe = '7d' | '30d' | '90d' | 'all'
+type Timeframe = '7d' | '14d' | '30d' | 'all'
 type ResourceQualitySelection = number | 'weighted'
 
 type IndexDefinition = {
@@ -388,6 +388,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Improved dashboard number precision and highlighted key values in signal text.',
       'Added smoother dashboard refresh progress feedback.',
       'Weighted dashboard event picks toward newer speed modifiers.',
+      'Updated comparison chart timeframes with a 14D option and removed 90D.',
     ],
   },
   {
@@ -644,7 +645,7 @@ function comparisonStateFromPreset(preset: ComparisonPreset): ComparisonState {
     selections: preset.selections,
     mode: preset.mode,
     metric: preset.metric,
-    timeframe: preset.timeframe,
+    timeframe: normalizeTimeframe(preset.timeframe),
     height: preset.height,
   }
 }
@@ -810,9 +811,15 @@ function formatCountdown(target: Date, now = new Date()) {
 
 function timeframeDays(timeframe: Timeframe) {
   if (timeframe === '7d') return 7
+  if (timeframe === '14d') return 14
   if (timeframe === '30d') return 30
-  if (timeframe === '90d') return 90
   return null
+}
+
+function normalizeTimeframe(timeframe: unknown): Timeframe {
+  return timeframe === '7d' || timeframe === '14d' || timeframe === '30d' || timeframe === 'all'
+    ? timeframe
+    : '30d'
 }
 
 function filterByTimeframe<T extends { date: string }>(rows: T[], timeframe: Timeframe) {
@@ -1035,7 +1042,7 @@ function eventAgeLabel(event: RealmEvent, now = new Date()) {
     return ''
   }
 
-  const ageDays = Math.max(0, Math.floor((now.getTime() - startedAt) / 86_400_000))
+  const ageDays = Math.max(0, Math.floor((now.getTime() - startedAt) / 86_400_000) - 1)
   if (ageDays === 0) return ' This modifier started today, so it is still early in price discovery.'
   if (ageDays === 1) return ' This modifier started yesterday, so it is still relatively fresh.'
   if (ageDays <= 7) return ` This modifier started ${ageDays} days ago, so some repricing may already be underway.`
@@ -2383,7 +2390,9 @@ function App() {
   const [comparisonSeries, setComparisonSeries] = useState<ComparisonDatum[]>(demoComparisonData)
   const [compareMode, setCompareMode] = useState<CompareMode>(storedComparisonState.mode ?? 'percent')
   const [compareMetric, setCompareMetric] = useState<CompareMetric>(storedComparisonState.metric ?? 'vwap')
-  const [compareTimeframe, setCompareTimeframe] = useState<Timeframe>(storedComparisonState.timeframe ?? '30d')
+  const [compareTimeframe, setCompareTimeframe] = useState<Timeframe>(
+    normalizeTimeframe(storedComparisonState.timeframe),
+  )
   const [comparisonHeight, setComparisonHeight] = useState(storedComparisonState.height ?? 460)
   const [presetName, setPresetName] = useState('')
   const [comparisonPresets, setComparisonPresets] = useState<ComparisonPreset[]>(() =>
@@ -2853,7 +2862,7 @@ function App() {
     setComparisonSelections(state.selections)
     setCompareMode(state.mode)
     setCompareMetric(state.metric)
-    setCompareTimeframe(state.timeframe)
+    setCompareTimeframe(normalizeTimeframe(state.timeframe))
     setComparisonHeight(state.height)
   }
 
@@ -3562,8 +3571,8 @@ function App() {
                 onChange={(event) => setCompareTimeframe(event.target.value as Timeframe)}
               >
                 <option value="7d">7D</option>
+                <option value="14d">14D</option>
                 <option value="30d">30D</option>
-                <option value="90d">90D</option>
                 <option value="all">All</option>
               </select>
             </label>
