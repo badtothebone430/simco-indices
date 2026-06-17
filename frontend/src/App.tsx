@@ -641,7 +641,7 @@ type CachedValue<T> = {
   value: T
 }
 
-const dataCachePrefix = 'simco-data-cache:v5:'
+const dataCachePrefix = 'simco-data-cache:v6:'
 
 function latestUpdateCycleKey(now = new Date()) {
   // The collector starts at 01:20 UTC, but cache should expire when new data is expected to be visible.
@@ -1993,11 +1993,13 @@ function renderContextOverlays(
   showContests: boolean,
   showOrders: boolean,
   keyPrefix: string,
+  yAxisId?: string,
 ) {
   const contests = recentContests(context.contests)
   const orders = recentGovernmentOrders(context.governmentOrders)
   const eventGroups = groupedEvents(context.events)
   const multiRealm = hasMultipleRealms(context)
+  const axisProps = yAxisId ? { yAxisId } : {}
 
   return (
     <>
@@ -2006,6 +2008,7 @@ function renderContextOverlays(
           .filter((phase) => phase.phase !== 'normal')
           .map((phase, index) => (
             <ReferenceArea
+              {...axisProps}
               fill={phaseFill(phase)}
               fillOpacity={1}
               ifOverflow="visible"
@@ -2035,6 +2038,7 @@ function renderContextOverlays(
 
           return [
             <ReferenceLine
+              {...axisProps}
               ifOverflow="visible"
               key={`${keyPrefix}-event-start-${first.realm_id}-${first.since}-${first.until}`}
               label={{
@@ -2049,6 +2053,7 @@ function renderContextOverlays(
               x={toDateOnly(first.since)}
             />,
             <ReferenceLine
+              {...axisProps}
               ifOverflow="visible"
               key={`${keyPrefix}-event-end-${first.realm_id}-${first.since}-${first.until}`}
               stroke={color}
@@ -2061,6 +2066,7 @@ function renderContextOverlays(
         contests.flatMap((contest, index) => (
           [
             <ReferenceLine
+              {...axisProps}
               ifOverflow="visible"
               key={`${keyPrefix}-contest-start-${contest.realm_id}-${contest.contest_id}`}
               label={{
@@ -2075,6 +2081,7 @@ function renderContextOverlays(
               x={toDateOnly(contest.start_at)}
             />,
             <ReferenceLine
+              {...axisProps}
               ifOverflow="visible"
               key={`${keyPrefix}-contest-end-${contest.realm_id}-${contest.contest_id}`}
               stroke={contestLineColor(contest)}
@@ -2090,6 +2097,7 @@ function renderContextOverlays(
 
           return [
             <ReferenceLine
+              {...axisProps}
               ifOverflow="visible"
               key={`${keyPrefix}-order-start-${order.realm_id}-${order.order_id}-${order.resource_id}-${order.quality}`}
               label={{
@@ -2105,6 +2113,7 @@ function renderContextOverlays(
             />,
             order.due_at ? (
               <ReferenceLine
+                {...axisProps}
                 ifOverflow="visible"
                 key={`${keyPrefix}-order-due-${order.realm_id}-${order.order_id}-${order.resource_id}-${order.quality}`}
                 stroke={color}
@@ -2123,6 +2132,7 @@ function renderTechnicalOverlays(
   signal: TechnicalSignal | null,
   keyPrefix: string,
   color = 'var(--accent)',
+  yAxisId?: string,
 ) {
   if (!signal || rows.length < 2) {
     return null
@@ -2130,11 +2140,13 @@ function renderTechnicalOverlays(
 
   const startDate = rows[0].date
   const endDate = rows.at(-1)!.date
+  const axisProps = yAxisId ? { yAxisId } : {}
 
   return (
     <>
       {signal.demandZone && (
         <ReferenceArea
+          {...axisProps}
           fill="var(--technical-demand)"
           fillOpacity={1}
           ifOverflow="visible"
@@ -2155,6 +2167,7 @@ function renderTechnicalOverlays(
       )}
       {signal.supplyZone && (
         <ReferenceArea
+          {...axisProps}
           fill="var(--technical-supply)"
           fillOpacity={1}
           ifOverflow="visible"
@@ -2176,6 +2189,7 @@ function renderTechnicalOverlays(
       {signal.channel && (
         <>
           <ReferenceLine
+            {...axisProps}
             ifOverflow="visible"
             key={`${keyPrefix}-channel-upper`}
             label={{
@@ -2192,6 +2206,7 @@ function renderTechnicalOverlays(
             strokeDasharray="6 5"
           />
           <ReferenceLine
+            {...axisProps}
             ifOverflow="visible"
             key={`${keyPrefix}-channel-lower`}
             segment={[
@@ -4062,6 +4077,7 @@ function App() {
                   showContests,
                   showOrders,
                   'comparison',
+                  'value',
                 )}
                 {showTechnicals &&
                   comparisonTechnicals.map((item) =>
@@ -4070,6 +4086,7 @@ function App() {
                       item.signal,
                       `comparison-technical-${item.key}`,
                       item.color,
+                      'value',
                     ),
                   )} 
                 <Legend />
