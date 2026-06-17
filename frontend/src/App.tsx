@@ -236,7 +236,7 @@ type TechnicalPoint = {
 }
 
 type TechnicalSignal = {
-  type: 'demand' | 'supply' | 'ascending-channel' | 'descending-channel' | 'range'
+  type: 'demand' | 'supply' | 'ascending-channel' | 'descending-channel'
   title: string
   detail: string
   tone: 'positive' | 'negative' | 'neutral'
@@ -245,6 +245,7 @@ type TechnicalSignal = {
   supplyZone?: [number, number]
   channel?: {
     direction: 'ascending' | 'descending'
+    startDate: string
     upper: [number, number]
     lower: [number, number]
   }
@@ -444,6 +445,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Stabilized percent-change baselines for market-value comparisons.',
       'Added an interactive comparison example to the guided tour.',
       'Improved sector baskets so every component row is visible in the current basket table.',
+      'Tightened technical analysis signals and improved channel label placement.',
     ],
   },
   {
@@ -1389,8 +1391,7 @@ async function loadTechnicalSignal(realm: RealmId): Promise<DashboardTechnical |
 
       const marketWeight = Math.log1p(latest.market_value / Math.max(medianMarketValue, 1))
       const volumeWeight = Math.log1p(latest.volume / Math.max(medianVolume, 1))
-      const actionableWeight = signal.type === 'range' ? 0.35 : 1
-      const score = signal.strength * actionableWeight * (1 + marketWeight + volumeWeight * 0.65)
+      const score = signal.strength * (1 + marketWeight + volumeWeight * 0.65)
       return { latest, series, signal, score }
     })
     .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
@@ -1732,9 +1733,49 @@ function linearRegression(values: number[]) {
   return { slope, intercept }
 }
 
+function regressionFit(values: number[], slope: number, intercept: number) {
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length
+  const total = values.reduce((sum, value) => sum + (value - mean) ** 2, 0)
+  if (total === 0) return 0
+
+  const error = values.reduce((sum, value, index) => {
+    const fitted = intercept + slope * index
+    return sum + (value - fitted) ** 2
+  }, 0)
+
+  return Math.max(0, 1 - error / total)
+}
+
+function channelWindow(rows: TechnicalPoint[]) {
+  if (rows.length < 12) return rows
+
+  const values = rows.map((row) => row.value)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min
+  if (range <= 0) return rows
+
+  let breakIndex = -1
+  let largestMove = 0
+  for (let index = 1; index < values.length; index += 1) {
+    const move = Math.abs(values[index] - values[index - 1])
+    if (move > largestMove) {
+      largestMove = move
+      breakIndex = index
+    }
+  }
+
+  const recentRows = breakIndex >= 0 ? rows.slice(breakIndex) : rows
+  if (largestMove >= range * 0.28 && recentRows.length >= 8) {
+    return recentRows.slice(-18)
+  }
+
+  return rows.slice(-18)
+}
+
 function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null {
-  const rows = inputRows.filter((row) => Number.isFinite(row.value) && row.value > 0).slice(-30)
-  if (rows.length < 5) {
+  const rows = inputRows.filter((row) => Number.isFinite(row.value)).slice(-45)
+  if (rows.length < 8) {
     return null
   }
 
@@ -1747,31 +1788,50 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
     return null
   }
 
-  const zoneSize = Math.max(range * 0.14, Math.abs(latest) * 0.018)
+  const scale = Math.max(Math.abs(latest), range, 1)
+  const volatility = range / scale
+  if (volatility < 0.006) {
+    return null
+  }
+
+  const zoneSize = Math.max(range * 0.14, scale * 0.012)
   const demandZone: [number, number] = [min, min + zoneSize]
   const supplyZone: [number, number] = [max - zoneSize, max]
-  const { slope, intercept } = linearRegression(values)
-  const fitted = values.map((_value, index) => intercept + slope * index)
-  const residuals = values.map((value, index) => value - fitted[index])
+  const channelRows = channelWindow(rows)
+  const channelValues = channelRows.map((row) => row.value)
+  const channelStartIndex = rows.length - channelRows.length
+  const { slope, intercept } = linearRegression(channelValues)
+  const r2 = regressionFit(channelValues, slope, intercept)
+  const fitted = channelValues.map((_value, index) => intercept + slope * index)
+  const residuals = channelValues.map((value, index) => value - fitted[index])
   const upperOffset = Math.max(...residuals)
   const lowerOffset = Math.min(...residuals)
   const channelRange = upperOffset - lowerOffset
-  const slopeThreshold = range / Math.max(rows.length * 4.5, 1)
+  const channelLocalRange = Math.max(...channelValues) - Math.min(...channelValues)
+  const slopeThreshold = Math.max(channelLocalRange, range * 0.35) / Math.max(channelRows.length * 2.1, 1)
+  const channelIsClean = r2 >= 0.45 && channelRange <= Math.max(channelLocalRange * 0.9, range * 0.22)
   const channel =
     channelRange > 0
       ? {
           direction: slope >= 0 ? 'ascending' as const : 'descending' as const,
-          upper: [intercept + upperOffset, intercept + slope * (rows.length - 1) + upperOffset] as [number, number],
-          lower: [intercept + lowerOffset, intercept + slope * (rows.length - 1) + lowerOffset] as [number, number],
+          startDate: rows[channelStartIndex].date,
+          upper: [intercept + upperOffset, intercept + slope * (channelRows.length - 1) + upperOffset] as [number, number],
+          lower: [intercept + lowerOffset, intercept + slope * (channelRows.length - 1) + lowerOffset] as [number, number],
         }
       : undefined
 
-  const nearDemand = latest <= demandZone[1]
-  const nearSupply = latest >= supplyZone[0]
-  const demandProximity = Math.max(0, 1 - Math.abs(latest - demandZone[1]) / Math.max(zoneSize, 1))
-  const supplyProximity = Math.max(0, 1 - Math.abs(latest - supplyZone[0]) / Math.max(zoneSize, 1))
+  const demandCenter = (demandZone[0] + demandZone[1]) / 2
+  const supplyCenter = (supplyZone[0] + supplyZone[1]) / 2
+  const nearDemand = latest <= demandZone[1] + zoneSize * 1.25
+  const nearSupply = latest >= supplyZone[0] - zoneSize * 1.25
+  const demandProximity = Math.max(0, 1 - Math.abs(latest - demandCenter) / Math.max(zoneSize * 2.25, 0.000001))
+  const supplyProximity = Math.max(0, 1 - Math.abs(latest - supplyCenter) / Math.max(zoneSize * 2.25, 0.000001))
+  const demandTouches = values.filter((value) => value >= demandZone[0] - zoneSize * 0.35 && value <= demandZone[1] + zoneSize * 0.35).length
+  const supplyTouches = values.filter((value) => value >= supplyZone[0] - zoneSize * 0.35 && value <= supplyZone[1] + zoneSize * 0.35).length
+  const hasDemandZone = demandTouches >= 2
+  const hasSupplyZone = supplyTouches >= 2
   const channelKind =
-    Math.abs(slope) >= slopeThreshold
+    channelIsClean && Math.abs(slope) >= slopeThreshold
       ? slope > 0
         ? 'ascending-channel'
         : 'descending-channel'
@@ -1779,7 +1839,7 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
   const channelStrength = channelKind ? Math.min(Math.abs(slope) / Math.max(slopeThreshold, 0.000001), 3) / 3 : 0
   const channelLabel = channelKind === 'ascending-channel' ? 'Ascending Channel' : 'Descending Channel'
 
-  if (nearDemand) {
+  if (nearDemand && demandProximity >= 0.62 && demandTouches >= 2) {
     return {
       type: 'demand',
       title: 'Testing Demand',
@@ -1787,19 +1847,19 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
       tone: 'positive',
       strength: 1 + demandProximity + channelStrength * 0.35,
       demandZone,
-      supplyZone,
+      supplyZone: hasSupplyZone ? supplyZone : undefined,
       channel: channelKind ? channel : undefined,
     }
   }
 
-  if (nearSupply) {
+  if (nearSupply && supplyProximity >= 0.62 && supplyTouches >= 2) {
     return {
       type: 'supply',
       title: 'Testing Supply',
       detail: `Price is near the recent supply zone around ${formatPriceLevel(supplyZone[0])}-${formatPriceLevel(supplyZone[1])}.`,
       tone: 'negative',
       strength: 1 + supplyProximity + channelStrength * 0.35,
-      demandZone,
+      demandZone: hasDemandZone ? demandZone : undefined,
       supplyZone,
       channel: channelKind ? channel : undefined,
     }
@@ -1815,25 +1875,17 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
           : 'Price is moving inside a falling channel, with lower support and resistance levels.',
       tone: channelKind === 'ascending-channel' ? 'positive' : 'negative',
       strength: 0.8 + channelStrength,
-      demandZone,
-      supplyZone,
+      demandZone: hasDemandZone ? demandZone : undefined,
+      supplyZone: hasSupplyZone ? supplyZone : undefined,
       channel,
     }
   }
 
-  return {
-    type: 'range',
-    title: 'Range Watch',
-    detail: `Price is between demand near ${formatPriceLevel(demandZone[0])} and supply near ${formatPriceLevel(supplyZone[1])}.`,
-    tone: 'neutral',
-    strength: 0.35,
-    demandZone,
-    supplyZone,
-  }
+  return null
 }
 
 function analyzeEmergingTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null {
-  const rows = inputRows.filter((row) => Number.isFinite(row.value) && row.value > 0).slice(-4)
+  const rows = inputRows.filter((row) => Number.isFinite(row.value)).slice(-4)
   if (rows.length < 2) {
     return null
   }
@@ -1841,6 +1893,10 @@ function analyzeEmergingTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal
   const first = rows[0].value
   const latest = rows.at(-1)!.value
   const change = first ? latest / first - 1 : 0
+  if (Math.abs(change) < 0.04) {
+    return null
+  }
+
   const tone = change >= 0 ? 'positive' : 'negative'
 
   return {
@@ -1978,6 +2034,12 @@ function recentGovernmentOrders(orders: RealmGovernmentOrder[]) {
     .slice(0, 4)
 }
 
+function orderChartLabel(order: RealmGovernmentOrder, multiRealm: boolean) {
+  const realmPrefix = multiRealm ? `${realms[order.realm_id]}: ` : ''
+  const resourceLabel = `${order.resource_name} Q${order.quality}`
+  return `${realmPrefix}Order: ${resourceLabel}`
+}
+
 function topOverlayDy(row: number) {
   return 12 + row * 14
 }
@@ -2093,7 +2155,7 @@ function renderContextOverlays(
       {showOrders &&
         orders.flatMap((order, index) => {
           const color = orderLineColor(order)
-          const label = `${multiRealm ? `${realms[order.realm_id]}: ` : ''}${order.project_name}`
+          const label = orderChartLabel(order, multiRealm)
 
           return [
             <ReferenceLine
@@ -2104,7 +2166,8 @@ function renderContextOverlays(
                 value: label,
                 fill: color,
                 fontSize: 11,
-                dy: bottomOverlayDy(index + contests.length),
+                dx: -142,
+                dy: bottomOverlayDy((index + contests.length) % 4),
                 position: 'insideBottomLeft',
               }}
               stroke={color}
@@ -2140,7 +2203,11 @@ function renderTechnicalOverlays(
 
   const startDate = rows[0].date
   const endDate = rows.at(-1)!.date
+  const latest = rows.at(-1)?.value ?? 0
   const axisProps = yAxisId ? { yAxisId } : {}
+  const channelLabelOnLower =
+    signal.channel &&
+    Math.abs(latest - signal.channel.upper[1]) < Math.abs(latest - signal.channel.lower[1])
 
   return (
     <>
@@ -2155,7 +2222,8 @@ function renderTechnicalOverlays(
             value: 'Demand zone',
             fill: 'var(--technical-demand-line)',
             fontSize: 11,
-            position: 'insideBottomLeft',
+            dy: 22,
+            position: 'insideLeft',
           }}
           stroke="var(--technical-demand-line)"
           strokeDasharray="5 4"
@@ -2176,7 +2244,8 @@ function renderTechnicalOverlays(
             value: 'Supply zone',
             fill: 'var(--technical-supply-line)',
             fontSize: 11,
-            position: 'insideTopLeft',
+            dy: -22,
+            position: 'insideLeft',
           }}
           stroke="var(--technical-supply-line)"
           strokeDasharray="5 4"
@@ -2192,14 +2261,20 @@ function renderTechnicalOverlays(
             {...axisProps}
             ifOverflow="visible"
             key={`${keyPrefix}-channel-upper`}
-            label={{
-              value: signal.channel.direction === 'ascending' ? 'Ascending channel' : 'Descending channel',
-              fill: color,
-              fontSize: 11,
-              position: 'insideBottomRight',
-            }}
+            label={
+              channelLabelOnLower
+                ? undefined
+                : {
+                    value: signal.channel.direction === 'ascending' ? 'Ascending channel' : 'Descending channel',
+                    fill: color,
+                    fontSize: 11,
+                    dx: -72,
+                    dy: 12,
+                    position: 'insideRight',
+                  }
+            }
             segment={[
-              { x: startDate, y: signal.channel.upper[0] },
+              { x: signal.channel.startDate, y: signal.channel.upper[0] },
               { x: endDate, y: signal.channel.upper[1] },
             ]}
             stroke={color}
@@ -2209,8 +2284,20 @@ function renderTechnicalOverlays(
             {...axisProps}
             ifOverflow="visible"
             key={`${keyPrefix}-channel-lower`}
+            label={
+              channelLabelOnLower
+                ? {
+                    value: signal.channel.direction === 'ascending' ? 'Ascending channel' : 'Descending channel',
+                    fill: color,
+                    fontSize: 11,
+                    dx: -72,
+                    dy: -10,
+                    position: 'insideRight',
+                  }
+                : undefined
+            }
             segment={[
-              { x: startDate, y: signal.channel.lower[0] },
+              { x: signal.channel.startDate, y: signal.channel.lower[0] },
               { x: endDate, y: signal.channel.lower[1] },
             ]}
             stroke={color}
@@ -2369,7 +2456,7 @@ function MiniChart({
                 <>
                   <ReferenceLine
                     segment={[
-                      { x: data[0].date, y: technical.channel.upper[0] },
+                      { x: technical.channel.startDate, y: technical.channel.upper[0] },
                       { x: data.at(-1)!.date, y: technical.channel.upper[1] },
                     ]}
                     stroke="currentColor"
@@ -2377,7 +2464,7 @@ function MiniChart({
                   />
                   <ReferenceLine
                     segment={[
-                      { x: data[0].date, y: technical.channel.lower[0] },
+                      { x: technical.channel.startDate, y: technical.channel.lower[0] },
                       { x: data.at(-1)!.date, y: technical.channel.lower[1] },
                     ]}
                     stroke="currentColor"
