@@ -3284,6 +3284,52 @@ function App() {
   }
 
   const isAnyMarketDataLoading = isLoading || isDashboardLoading || isComparisonLoading
+  const chartOverlayControls = (
+    <section className="chart-overlay-controls" aria-label="Chart overlays">
+      <button
+        className={showPhases ? 'active' : ''}
+        onClick={() => setShowPhases((current) => !current)}
+        type="button"
+      >
+        Show Phase
+      </button>
+      <button
+        className={showEvents ? 'active' : ''}
+        onClick={() => setShowEvents((current) => !current)}
+        type="button"
+      >
+        Show Events
+      </button>
+      <button
+        className={showContests ? 'active' : ''}
+        onClick={() => setShowContests((current) => !current)}
+        type="button"
+      >
+        Show Contests
+      </button>
+      <button
+        className={showOrders ? 'active' : ''}
+        onClick={() => setShowOrders((current) => !current)}
+        type="button"
+      >
+        Show Orders
+      </button>
+      <button
+        className={showTechnicals ? 'active' : ''}
+        onClick={() => setShowTechnicals((current) => !current)}
+        type="button"
+      >
+        Show Technicals
+      </button>
+      <button
+        className={showVolume ? 'active' : ''}
+        onClick={() => setShowVolume((current) => !current)}
+        type="button"
+      >
+        Show Volume
+      </button>
+    </section>
+  )
 
   return (
     <main className="app-shell">
@@ -3415,50 +3461,7 @@ function App() {
         </button>
       </nav>
 
-      <section className="chart-overlay-controls" aria-label="Chart overlays">
-        <button
-          className={showPhases ? 'active' : ''}
-          onClick={() => setShowPhases((current) => !current)}
-          type="button"
-        >
-          Show Phase
-        </button>
-        <button
-          className={showEvents ? 'active' : ''}
-          onClick={() => setShowEvents((current) => !current)}
-          type="button"
-        >
-          Show Events
-        </button>
-        <button
-          className={showContests ? 'active' : ''}
-          onClick={() => setShowContests((current) => !current)}
-          type="button"
-        >
-          Show Contests
-        </button>
-        <button
-          className={showOrders ? 'active' : ''}
-          onClick={() => setShowOrders((current) => !current)}
-          type="button"
-        >
-          Show Orders
-        </button>
-        <button
-          className={showTechnicals ? 'active' : ''}
-          onClick={() => setShowTechnicals((current) => !current)}
-          type="button"
-        >
-          Show Technicals
-        </button>
-        <button
-          className={showVolume ? 'active' : ''}
-          onClick={() => setShowVolume((current) => !current)}
-          type="button"
-        >
-          Show Volume
-        </button>
-      </section>
+      {activeView !== 'compare' && chartOverlayControls}
 
       {activeView === 'dashboard' && (
         <section className="clean-dashboard view-panel">
@@ -4012,6 +4015,8 @@ function App() {
               </div>
             )}
           </div>
+
+          {chartOverlayControls}
 
           <div className="comparison-chart" style={{ height: comparisonHeight }}>
             <ResponsiveContainer width="100%" height="100%">
