@@ -2546,7 +2546,7 @@ function App() {
         <div className="segmented-control" aria-label="Realm">
           {Object.entries(realms).map(([id, name]) => (
             <button
-              className={Number(id) === realm ? 'active' : ''}
+              className={`${Number(id) === realm ? 'active' : ''} realm-${id}`}
               key={id}
               onClick={() => setRealm(Number(id) as RealmId)}
               type="button"

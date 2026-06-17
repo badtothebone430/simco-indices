@@ -782,6 +782,22 @@
   box-shadow: var(--shadow-sm);
 }
 
+.segmented-control button.realm-1 {
+  color: var(--warning);
+}
+
+.segmented-control button.realm-1:hover,
+.segmented-control button.realm-1.active {
+  color: #9a5b00;
+  background: rgba(196, 122, 16, 0.13);
+}
+
+:root[data-theme='dark'] .segmented-control button.realm-1:hover,
+:root[data-theme='dark'] .segmented-control button.realm-1.active {
+  color: #ffc75f;
+  background: rgba(224, 162, 59, 0.16);
+}
+
 .index-grid {
   position: relative;
   z-index: 30;
