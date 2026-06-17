@@ -387,6 +387,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Added weighted all-quality comparison for individual resources.',
       'Improved dashboard number precision and highlighted key values in signal text.',
       'Added smoother dashboard refresh progress feedback.',
+      'Weighted dashboard event picks toward newer speed modifiers.',
     ],
   },
   {
@@ -584,7 +585,7 @@ type CachedValue<T> = {
   value: T
 }
 
-const dataCachePrefix = 'simco-data-cache:v2:'
+const dataCachePrefix = 'simco-data-cache:v3:'
 
 function latestUpdateCycleKey(now = new Date()) {
   // The collector starts at 01:20 UTC, but cache should expire when new data is expected to be visible.
@@ -1004,12 +1005,41 @@ function transportModifierDetail(event: RealmEvent) {
     ? 'transport supply is slower, so most non-research resources may see higher logistics pressure, firmer prices, and weaker traded volume.'
     : 'transport supply is faster, so most non-research resources may see easier logistics, softer price pressure, and stronger traded volume.'
 
-  return `Transport has a ${event.speed_modifier > 0 ? '+' : ''}${event.speed_modifier}% production speed modifier active in ${realms[event.realm_id]}. Because transport is used across most supply chains apart from research, ${direction}${essentialInfrastructureNote(event)}`
+  return `Transport has a ${event.speed_modifier > 0 ? '+' : ''}${event.speed_modifier}% production speed modifier active in ${realms[event.realm_id]}. Because transport is used across most supply chains apart from research, ${direction}${essentialInfrastructureNote(event)}${eventAgeLabel(event)}`
 }
 
 function eventDashboardImpact(event: RealmEvent) {
   const broadMarketMultiplier = isTransportEvent(event) ? 2.25 : 1
-  return Math.abs(event.speed_modifier) * broadMarketMultiplier
+  return Math.abs(event.speed_modifier) * broadMarketMultiplier * eventFreshnessWeight(event)
+}
+
+function eventFreshnessWeight(event: RealmEvent, now = new Date()) {
+  const startedAt = new Date(event.since).getTime()
+  if (!Number.isFinite(startedAt)) {
+    return 0.5
+  }
+
+  const ageDays = Math.max(0, (now.getTime() - startedAt) / 86_400_000)
+
+  if (ageDays <= 1) return 1.35
+  if (ageDays <= 2) return 1.15
+  if (ageDays <= 4) return 0.85
+  if (ageDays <= 7) return 0.45
+  if (ageDays <= 10) return 0.2
+  return 0.08
+}
+
+function eventAgeLabel(event: RealmEvent, now = new Date()) {
+  const startedAt = new Date(event.since).getTime()
+  if (!Number.isFinite(startedAt)) {
+    return ''
+  }
+
+  const ageDays = Math.max(0, Math.floor((now.getTime() - startedAt) / 86_400_000))
+  if (ageDays === 0) return ' This modifier started today, so it is still early in price discovery.'
+  if (ageDays === 1) return ' This modifier started yesterday, so it is still relatively fresh.'
+  if (ageDays <= 7) return ` This modifier started ${ageDays} days ago, so some repricing may already be underway.`
+  return ` This modifier started ${ageDays} days ago, so much of the direct price reaction may already be priced in.`
 }
 
 function movementStoryScore(change: number, marketValue: number, volume: number, medianMarketValue: number, medianVolume: number) {
@@ -1348,7 +1378,7 @@ async function loadDashboard() {
           title: watchEvent.speed_modifier < 0 ? 'Supply Pressure' : 'Production Boost',
           name: watchEvent.resource_name,
           realm: watchEvent.realm_id,
-          detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}${essentialInfrastructureNote(watchEvent)}`,
+          detail: `${watchEvent.resource_name} has a ${watchEvent.speed_modifier > 0 ? '+' : ''}${watchEvent.speed_modifier}% production speed modifier active in ${realms[watchEvent.realm_id]}. ${speedModifierDirection(watchEvent.speed_modifier)}${essentialInfrastructureNote(watchEvent)}${eventAgeLabel(watchEvent)}`,
           tone: watchEvent.speed_modifier >= 0 ? 'positive' : 'negative',
           series: watchEventMini?.series ?? [],
           winner: impact.winner,
