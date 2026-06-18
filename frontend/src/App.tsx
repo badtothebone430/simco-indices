@@ -445,6 +445,19 @@ const tourSteps: TourStep[] = [
 
 const changelogEntries: ChangelogEntry[] = [
   {
+    date: '2026-06-18',
+    title: 'Composition, storage, and chart polish',
+    items: [
+      'Fixed dashboard picks so each realm shows its own daily and watch signals.',
+      'Added Composition tab for tracking index basket weight changes over time.',
+      'Added current basket View Composition shortcut from the Overview tab.',
+      'Reduced stored composition history to 30 days to control database storage usage.',
+      'Added component-only backfill workflow for rebuilding composition data without refetching market history.',
+      'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
+      'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
+    ],
+  },
+  {
     date: '2026-06-16',
     title: 'Guided tour, tools, and polish',
     items: [
@@ -470,10 +483,6 @@ const changelogEntries: ChangelogEntry[] = [
       'Added an interactive comparison example to the guided tour.',
       'Improved sector baskets so every component row is visible in the current basket table.',
       'Tightened technical analysis signals and improved channel label placement.',
-      'Added Composition tab for tracking index basket weight changes over time.',
-      'Reduced stored composition history to 30 days to control database storage usage.',
-      'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
-      'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
     ],
   },
   {
