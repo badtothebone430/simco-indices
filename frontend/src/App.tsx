@@ -2627,7 +2627,7 @@ function renderContextOverlays(
                     label={update.label}
                     slot={slot}
                     viewBox={props.viewBox}
-                    xOffset={8}
+                    xOffset={-148}
                   />
                 ),
               }}
