@@ -5,6 +5,7 @@ const REALMS = [0, 1]
 const RATE_LIMIT_DELAY_MS = 2500
 const MAX_FETCH_ATTEMPTS = 5
 const BASE_INDEX_VALUE = 1000
+const DATA_RETENTION_DAYS = Number(process.env.DATA_RETENTION_DAYS ?? 366)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 const startedAt = Date.now()
 
@@ -276,7 +277,7 @@ function workflowRunUrl() {
   return `${serverUrl}/${repository}/actions/runs/${runId}`
 }
 
-async function sendDiscordWebhook({ ok, results, error }) {
+async function sendDiscordWebhook({ ok, results, pruned, error }) {
   const webhookUrl = process.env.DISCORD_WEBHOOK
   if (!webhookUrl) {
     return
@@ -290,11 +291,17 @@ async function sendDiscordWebhook({ ok, results, error }) {
         `Realm ${result.realm}: ${result.marketRows} market rows, ${result.indexValues} index rows`,
     )
     .join('\n')
+  const cleanupSummary = Array.isArray(pruned)
+    ? pruned
+        .map((result) => `${result.table}: ${result.deletedRows} old rows removed`)
+        .join('\n')
+    : null
 
   const content = ok
     ? [
         'SimCo Indices updated successfully.',
         `Duration: ${duration}`,
+        cleanupSummary,
         realmSummary,
         runUrl ? `Run: ${runUrl}` : null,
       ]
@@ -496,6 +503,12 @@ function toDateOnly(value) {
   return value.slice(0, 10)
 }
 
+function retentionCutoffDate(days = DATA_RETENTION_DAYS) {
+  const cutoff = new Date()
+  cutoff.setUTCDate(cutoff.getUTCDate() - days)
+  return cutoff.toISOString().slice(0, 10)
+}
+
 function buildMarketRows(realm, market) {
   const resource = market.resource
   const summaries = resource.summariesByQuality ?? []
@@ -648,6 +661,32 @@ async function upsertInChunks(supabase, table, rows, onConflict) {
   }
 }
 
+async function pruneOldMarketData(supabase) {
+  if (!Number.isFinite(DATA_RETENTION_DAYS) || DATA_RETENTION_DAYS <= 0) {
+    return []
+  }
+
+  const cutoffDate = retentionCutoffDate()
+  const tables = ['index_components', 'index_values', 'market_daily']
+  const results = []
+
+  for (const table of tables) {
+    const { error, count } = await supabase
+      .from(table)
+      .delete({ count: 'exact' })
+      .lt('date', cutoffDate)
+
+    if (error) {
+      throw new Error(`${table} prune failed: ${error.message}`)
+    }
+
+    results.push({ table, deletedRows: count ?? 0 })
+  }
+
+  console.log(`Pruned dated market data before ${cutoffDate}: ${JSON.stringify(results)}`)
+  return results
+}
+
 async function collectRealm(supabase, realm) {
   const context = await collectRealmContext(supabase, realm)
   const resources = await fetchResources(realm)
@@ -765,11 +804,12 @@ async function main() {
   })
 
   const results = []
+  const pruned = await pruneOldMarketData(supabase)
   for (const realm of REALMS) {
     results.push(await collectRealm(supabase, realm))
   }
 
-  const summary = { ok: true, collectedAt: new Date().toISOString(), results }
+  const summary = { ok: true, collectedAt: new Date().toISOString(), pruned, results }
   console.log(JSON.stringify(summary, null, 2))
   await sendDiscordWebhook(summary)
 }

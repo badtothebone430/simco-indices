@@ -9,6 +9,7 @@ const BACKFILL_DAYS = Number(process.env.BACKFILL_DAYS ?? 30)
 const BACKFILL_START_DATE = process.env.BACKFILL_START_DATE ?? ''
 const BACKFILL_END_DATE = process.env.BACKFILL_END_DATE ?? ''
 const BACKFILL_REALM = process.env.BACKFILL_REALM ?? 'all'
+const BACKFILL_MAX_DAYS = Number(process.env.BACKFILL_MAX_DAYS ?? 366)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 const startedAt = Date.now()
 
@@ -416,7 +417,8 @@ function rangeTimestampQuery() {
     return ''
   }
 
-  const start = Date.parse(`${BACKFILL_START_DATE}T00:00:00Z`)
+  const clampedStartDate = clampStartDateToMaxDays(BACKFILL_START_DATE, BACKFILL_END_DATE, BACKFILL_MAX_DAYS)
+  const start = Date.parse(`${clampedStartDate}T00:00:00Z`)
   const end = Date.parse(`${BACKFILL_END_DATE}T00:00:00Z`) + 86_400_000
 
   return `?start=${start}&end=${end}`
@@ -537,6 +539,21 @@ function isDateOnly(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime())
 }
 
+function dateDaysBefore(date, days) {
+  const value = new Date(`${date}T00:00:00Z`)
+  value.setUTCDate(value.getUTCDate() - days)
+  return value.toISOString().slice(0, 10)
+}
+
+function clampStartDateToMaxDays(startDate, endDate, maxDays) {
+  if (!Number.isFinite(maxDays) || maxDays <= 0) {
+    return startDate
+  }
+
+  const earliestAllowed = dateDaysBefore(endDate, maxDays - 1)
+  return startDate < earliestAllowed ? earliestAllowed : startDate
+}
+
 function configuredRealms() {
   if (BACKFILL_REALM === 'all') {
     return REALMS
@@ -555,7 +572,7 @@ function targetDatesFromRows(allRows) {
   const hasRange = Boolean(BACKFILL_START_DATE || BACKFILL_END_DATE)
 
   if (!hasRange) {
-    return allDates.slice(-BACKFILL_DAYS)
+    return allDates.slice(-Math.min(BACKFILL_DAYS, BACKFILL_MAX_DAYS))
   }
 
   if (!isDateOnly(BACKFILL_START_DATE) || !isDateOnly(BACKFILL_END_DATE)) {
@@ -566,7 +583,8 @@ function targetDatesFromRows(allRows) {
     throw new Error('BACKFILL_START_DATE must be before or equal to BACKFILL_END_DATE')
   }
 
-  return allDates.filter((date) => date >= BACKFILL_START_DATE && date <= BACKFILL_END_DATE)
+  const clampedStartDate = clampStartDateToMaxDays(BACKFILL_START_DATE, BACKFILL_END_DATE, BACKFILL_MAX_DAYS)
+  return allDates.filter((date) => date >= clampedStartDate && date <= BACKFILL_END_DATE)
 }
 
 function isResearchRow(row) {
