@@ -5,7 +5,8 @@ const REALMS = [0, 1]
 const RATE_LIMIT_DELAY_MS = 2500
 const MAX_FETCH_ATTEMPTS = 5
 const BASE_INDEX_VALUE = 1000
-const DATA_RETENTION_DAYS = Number(process.env.DATA_RETENTION_DAYS ?? 275)
+const DATA_RETENTION_DAYS = Number(process.env.DATA_RETENTION_DAYS ?? 90)
+const INDEX_COMPONENT_RETENTION_DAYS = Number(process.env.INDEX_COMPONENT_RETENTION_DAYS ?? 30)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 const startedAt = Date.now()
 
@@ -667,14 +668,19 @@ async function pruneOldMarketData(supabase) {
   }
 
   const cutoffDate = retentionCutoffDate()
-  const tables = ['index_components', 'index_values', 'market_daily']
+  const componentCutoffDate = retentionCutoffDate(INDEX_COMPONENT_RETENTION_DAYS)
+  const tables = [
+    ['index_components', componentCutoffDate],
+    ['index_values', cutoffDate],
+    ['market_daily', cutoffDate],
+  ]
   const results = []
 
-  for (const table of tables) {
+  for (const [table, tableCutoffDate] of tables) {
     const { error, count } = await supabase
       .from(table)
       .delete({ count: 'exact' })
-      .lt('date', cutoffDate)
+      .lt('date', tableCutoffDate)
 
     if (error) {
       throw new Error(`${table} prune failed: ${error.message}`)
@@ -683,7 +689,7 @@ async function pruneOldMarketData(supabase) {
     results.push({ table, deletedRows: count ?? 0 })
   }
 
-  console.log(`Pruned dated market data before ${cutoffDate}: ${JSON.stringify(results)}`)
+  console.log(`Pruned dated market data: ${JSON.stringify(results)}`)
   return results
 }
 

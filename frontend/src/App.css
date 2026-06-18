@@ -205,6 +205,10 @@
 }
 
 .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 36px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -342,7 +346,7 @@
   position: relative;
   z-index: 6;
   display: inline-grid;
-  grid-template-columns: repeat(5, minmax(118px, 1fr));
+  grid-template-columns: repeat(6, minmax(118px, 1fr));
   gap: 4px;
   padding: 4px;
   margin-bottom: 18px;
@@ -380,18 +384,22 @@
   --active-tab: 2;
 }
 
-.view-tabs.tools {
+.view-tabs.composition {
   --active-tab: 3;
 }
 
-.view-tabs.changelog {
+.view-tabs.tools {
   --active-tab: 4;
+}
+
+.view-tabs.changelog {
+  --active-tab: 5;
 }
 
 .view-tabs::before {
   position: absolute;
   inset: 4px auto 4px 4px;
-  width: calc((100% - 24px) / 5);
+  width: calc((100% - 28px) / 6);
   border-radius: 5px;
   background: var(--elevated);
   box-shadow: var(--shadow-sm);
@@ -1134,9 +1142,18 @@
 }
 
 .panel-header.compact {
+  align-items: center;
   margin: 0;
   padding: 18px 20px;
   border-bottom: 1px solid var(--border);
+}
+
+.panel-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .panel-header h2 {
@@ -1299,6 +1316,126 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.composition-panel {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.composition-controls {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(220px, 1.5fr) repeat(3, minmax(130px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.composition-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.composition-controls select {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--heading);
+  background: var(--elevated);
+}
+
+.composition-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 16px;
+}
+
+.composition-chart-panel,
+.composition-summary article {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--elevated);
+}
+
+.composition-chart-panel {
+  min-width: 0;
+  padding: 18px;
+}
+
+.composition-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.composition-title-row h3 {
+  margin: 0 0 6px;
+}
+
+.composition-title-row p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+}
+
+.composition-chart {
+  height: 430px;
+  min-width: 0;
+  --brush-track: color-mix(in srgb, var(--elevated) 82%, black);
+  --brush-border: color-mix(in srgb, var(--border) 85%, var(--accent));
+  --brush-window: color-mix(in srgb, var(--accent) 24%, transparent);
+  --brush-handle: color-mix(in srgb, var(--accent) 82%, var(--surface));
+}
+
+.composition-summary {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.composition-summary article {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+}
+
+.composition-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.composition-summary strong {
+  color: var(--heading);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.composition-summary small {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.composition-table {
+  max-height: 520px;
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+  text-align: center;
 }
 
 .comparison-heading {
@@ -1678,8 +1815,17 @@ tbody tr:hover {
     width: min(100%, 260px);
   }
 
-  .comparison-controls {
+  .comparison-controls,
+  .composition-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .composition-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .composition-chart {
+    height: 340px;
   }
 
   .tools-grid {
@@ -1779,6 +1925,19 @@ tbody tr:hover {
     right: 16px;
     left: 16px !important;
     width: auto;
+  }
+
+  .composition-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .composition-panel,
+  .composition-chart-panel {
+    padding: 14px;
+  }
+
+  .composition-chart {
+    height: 300px;
   }
 
   .tour-actions {

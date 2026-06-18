@@ -9,7 +9,8 @@ const BACKFILL_DAYS = Number(process.env.BACKFILL_DAYS ?? 30)
 const BACKFILL_START_DATE = process.env.BACKFILL_START_DATE ?? ''
 const BACKFILL_END_DATE = process.env.BACKFILL_END_DATE ?? ''
 const BACKFILL_REALM = process.env.BACKFILL_REALM ?? 'all'
-const BACKFILL_MAX_DAYS = Number(process.env.BACKFILL_MAX_DAYS ?? 275)
+const BACKFILL_MAX_DAYS = Number(process.env.BACKFILL_MAX_DAYS ?? 90)
+const INDEX_COMPONENT_RETENTION_DAYS = Number(process.env.INDEX_COMPONENT_RETENTION_DAYS ?? 30)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 const startedAt = Date.now()
 
@@ -554,6 +555,19 @@ function clampStartDateToMaxDays(startDate, endDate, maxDays) {
   return startDate < earliestAllowed ? earliestAllowed : startDate
 }
 
+function shouldStoreIndexComponentsForDate(date, endDate = BACKFILL_END_DATE) {
+  if (!endDate || !isDateOnly(endDate)) {
+    return true
+  }
+
+  if (!Number.isFinite(INDEX_COMPONENT_RETENTION_DAYS) || INDEX_COMPONENT_RETENTION_DAYS <= 0) {
+    return false
+  }
+
+  const earliestAllowed = dateDaysBefore(endDate, INDEX_COMPONENT_RETENTION_DAYS - 1)
+  return date >= earliestAllowed
+}
+
 function configuredRealms() {
   if (BACKFILL_REALM === 'all') {
     return REALMS
@@ -678,20 +692,22 @@ function buildBackfillIndices(realm, rows, dates) {
         total_market_value: totalMarketValue,
       })
 
-      indexComponents.push(
-        ...selectedRows.map((row) => ({
-          index_code: indexCode,
-          realm_id: realm,
-          date,
-          resource_id: row.resource_id,
-          resource_name: row.resource_name,
-          quality: row.quality,
-          weight: weightField === 'equal' ? 1 / selectedRows.length : row.market_value / denominator,
-          vwap: row.vwap,
-          volume: row.volume,
-          market_value: row.market_value,
-        })),
-      )
+      if (shouldStoreIndexComponentsForDate(date)) {
+        indexComponents.push(
+          ...selectedRows.map((row) => ({
+            index_code: indexCode,
+            realm_id: realm,
+            date,
+            resource_id: row.resource_id,
+            resource_name: row.resource_name,
+            quality: row.quality,
+            weight: weightField === 'equal' ? 1 / selectedRows.length : row.market_value / denominator,
+            vwap: row.vwap,
+            volume: row.volume,
+            market_value: row.market_value,
+          })),
+        )
+      }
     }
   }
 

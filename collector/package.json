@@ -5,6 +5,7 @@
   "scripts": {
     "collect": "node collect-market.mjs",
     "backfill:30d": "node backfill-30d.mjs",
+    "backfill:components": "node backfill-index-components.mjs",
     "backfill:orders": "node backfill-government-orders.mjs"
   },
   "dependencies": {

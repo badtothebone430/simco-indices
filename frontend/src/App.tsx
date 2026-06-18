@@ -13,6 +13,7 @@ import {
   FlaskConical,
   Globe2,
   Hammer,
+  Layers,
   LineChart as LineChartIcon,
   Menu,
   Moon,
@@ -53,11 +54,11 @@ import './App.css'
 type RealmId = 0 | 1
 type IndexCode = string
 type Theme = 'light' | 'dark'
-type AppView = 'dashboard' | 'overview' | 'compare' | 'tools' | 'changelog'
+type AppView = 'dashboard' | 'overview' | 'compare' | 'composition' | 'tools' | 'changelog'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
-type Timeframe = '7d' | '14d' | '1m' | '2m' | '3m' | '6m' | '9m' | '1y' | '18m' | '2y' | 'all'
+type Timeframe = '7d' | '14d' | '30d' | '60d' | '90d' | 'all'
 type ResourceQualitySelection = number | 'weighted'
 
 type IndexDefinition = {
@@ -84,6 +85,28 @@ type ComponentRow = {
   vwap: number
   volume: number
   market_value: number
+}
+
+type CompositionComponentRow = ComponentRow & {
+  date: string
+}
+
+type CompositionGrouping = 'resource' | 'resource_quality'
+type CompositionTopCount = 10 | 20
+
+type CompositionDatum = {
+  date: string
+  label: string
+  Other?: number
+  [key: string]: string | number | undefined
+}
+
+type CompositionSummary = {
+  largest?: { name: string; weight: number }
+  biggestIncrease?: { name: string; change: number }
+  biggestDecrease?: { name: string; change: number }
+  newestEntry?: { name: string; firstSeen: string }
+  mostConsistent?: { name: string; days: number }
 }
 
 type PhaseRange = {
@@ -438,7 +461,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Improved dashboard number precision and highlighted key values in signal text.',
       'Added smoother dashboard refresh progress feedback.',
       'Weighted dashboard event picks toward newer speed modifiers.',
-      'Expanded comparison chart timeframes with 14D, 1M, 2M, 3M, 6M, 9M, 1Y, 18M, 2Y, and All views.',
+      'Updated comparison chart timeframes around the 90-day retained data window.',
       'Added government orders as dashboard demand catalysts.',
       'Added government order chart overlays and tooltip context.',
       'Added chart brush controls and optional resource volume bars in comparisons.',
@@ -446,6 +469,8 @@ const changelogEntries: ChangelogEntry[] = [
       'Added an interactive comparison example to the guided tour.',
       'Improved sector baskets so every component row is visible in the current basket table.',
       'Tightened technical analysis signals and improved channel label placement.',
+      'Added Composition tab for tracking index basket weight changes over time.',
+      'Reduced stored composition history to 30 days to control database storage usage.',
     ],
   },
   {
@@ -497,6 +522,29 @@ const realms: Record<RealmId, string> = {
 
 const qualityLevels = Array.from({ length: 13 }, (_, quality) => quality)
 const comparisonColors = ['#247a7b', '#b85b31', '#5b6ee1', '#21834f', '#9b4eb5', '#a98918']
+const compositionColors = [
+  '#4fb8b2',
+  '#d46a3a',
+  '#7b8cff',
+  '#4fc278',
+  '#c06ad6',
+  '#d4a62f',
+  '#f06f8f',
+  '#7ac56f',
+  '#4f9de8',
+  '#c98755',
+  '#8f79db',
+  '#9da9b3',
+  '#64716d',
+  '#2f4f4a',
+  '#6a5a3a',
+  '#6d3f4a',
+  '#365a82',
+  '#5b7a3c',
+  '#85524a',
+  '#4d6a73',
+  '#24312f',
+]
 
 const indexDefinitions: IndexDefinition[] = [
   {
@@ -869,34 +917,34 @@ function formatCountdown(target: Date, now = new Date()) {
 function timeframeDays(timeframe: Timeframe) {
   if (timeframe === '7d') return 7
   if (timeframe === '14d') return 14
-  if (timeframe === '1m') return 30
-  if (timeframe === '2m') return 60
-  if (timeframe === '3m') return 90
-  if (timeframe === '6m') return 180
-  if (timeframe === '9m') return 270
-  if (timeframe === '1y') return 365
-  if (timeframe === '18m') return 548
-  if (timeframe === '2y') return 730
+  if (timeframe === '30d') return 30
+  if (timeframe === '60d') return 60
+  if (timeframe === '90d') return 90
   return null
 }
 
 function normalizeTimeframe(timeframe: unknown): Timeframe {
-  if (timeframe === '30d') return '1m'
-  if (timeframe === '90d') return '3m'
-  if (timeframe === '5m') return '6m'
-  return timeframe === '7d' ||
-    timeframe === '14d' ||
-    timeframe === '1m' ||
-    timeframe === '2m' ||
+  if (timeframe === '1m') return '30d'
+  if (timeframe === '2m') return '60d'
+  if (
     timeframe === '3m' ||
+    timeframe === '5m' ||
     timeframe === '6m' ||
     timeframe === '9m' ||
     timeframe === '1y' ||
     timeframe === '18m' ||
-    timeframe === '2y' ||
+    timeframe === '2y'
+  ) {
+    return '90d'
+  }
+  return timeframe === '7d' ||
+    timeframe === '14d' ||
+    timeframe === '30d' ||
+    timeframe === '60d' ||
+    timeframe === '90d' ||
     timeframe === 'all'
     ? timeframe
-    : '1m'
+    : '30d'
 }
 
 function filterByTimeframe<T extends { date: string }>(rows: T[], timeframe: Timeframe) {
@@ -957,6 +1005,53 @@ async function loadIndexComponents(realm: RealmId, indexCode: IndexCode, date: s
   }
 
   return data as ComponentRow[]
+}
+
+async function loadCompositionComponents(realm: RealmId, indexCode: IndexCode, timeframe: Timeframe) {
+  const supabase = getSupabase()
+  if (!supabase) {
+    return null
+  }
+
+  const pageSize = 1000
+  let from = 0
+  const rows: CompositionComponentRow[] = []
+  const startDate = (() => {
+    const days = timeframeDays(timeframe)
+    if (!days) return null
+    const date = new Date()
+    date.setUTCDate(date.getUTCDate() - days + 1)
+    return date.toISOString().slice(0, 10)
+  })()
+
+  while (true) {
+    let query = supabase
+      .from('index_components')
+      .select('date,resource_id,resource_name,quality,weight,vwap,volume,market_value')
+      .eq('realm_id', realm)
+      .eq('index_code', indexCode)
+      .order('date', { ascending: true })
+      .range(from, from + pageSize - 1)
+
+    if (startDate) {
+      query = query.gte('date', startDate)
+    }
+
+    const { data, error } = await query
+    if (error) {
+      return null
+    }
+
+    rows.push(...((data ?? []) as CompositionComponentRow[]))
+
+    if (!data || data.length < pageSize) {
+      break
+    }
+
+    from += pageSize
+  }
+
+  return rows
 }
 
 async function loadChartContext(realmIds: RealmId[], startDate: string, endDate: string) {
@@ -1623,6 +1718,129 @@ async function loadIndexComparisonSeries(realm: RealmId, selection: ComparisonSe
 
   const rows = await loadIndexSeries(selection.realm ?? realm, selection.indexCode)
   return rows?.map((row) => ({ date: row.date, value: row.value })) ?? []
+}
+
+function compositionKey(row: CompositionComponentRow, grouping: CompositionGrouping) {
+  return grouping === 'resource_quality'
+    ? `${row.resource_name} Q${row.quality}`
+    : row.resource_name
+}
+
+function buildCompositionView(
+  rows: CompositionComponentRow[],
+  grouping: CompositionGrouping,
+  topCount: CompositionTopCount,
+) {
+  const dateMap = new Map<
+    string,
+    Map<
+      string,
+      {
+        weight: number
+        market_value: number
+        volume: number
+        vwapWeightedValue: number
+        qualities: Set<number>
+      }
+    >
+  >()
+  const totals = new Map<string, number>()
+
+  for (const row of rows) {
+    const key = compositionKey(row, grouping)
+    totals.set(key, (totals.get(key) ?? 0) + row.weight)
+    const dateRows = dateMap.get(row.date) ?? new Map()
+    const current = dateRows.get(key) ?? {
+      weight: 0,
+      market_value: 0,
+      volume: 0,
+      vwapWeightedValue: 0,
+      qualities: new Set<number>(),
+    }
+    current.weight += row.weight
+    current.market_value += row.market_value
+    current.volume += row.volume
+    current.vwapWeightedValue += row.vwap * row.weight
+    current.qualities.add(row.quality)
+    dateRows.set(key, current)
+    dateMap.set(row.date, dateRows)
+  }
+
+  const topKeys = Array.from(totals.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topCount)
+    .map(([key]) => key)
+
+  const chartRows: CompositionDatum[] = Array.from(dateMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, dateRows]) => {
+      const datum: CompositionDatum = { date, label: shortDateLabel(date) }
+      let otherWeight = 0
+
+      for (const [key, value] of dateRows.entries()) {
+        if (topKeys.includes(key)) {
+          datum[key] = value.weight * 100
+        } else {
+          otherWeight += value.weight
+        }
+      }
+
+      if (otherWeight > 0) {
+        datum.Other = otherWeight * 100
+      }
+
+      return datum
+    })
+
+  const firstDate = chartRows.at(0)?.date
+  const latestDate = chartRows.at(-1)?.date
+  const firstRows = firstDate ? dateMap.get(firstDate) : undefined
+  const latestRows = latestDate ? dateMap.get(latestDate) : undefined
+  const allKeys = Array.from(totals.keys())
+  const dateEntries = Array.from(dateMap.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  const currentTableRows = Array.from(latestRows?.entries() ?? [])
+    .map(([name, value]) => ({
+      name,
+      currentWeight: value.weight,
+      change: value.weight - (firstRows?.get(name)?.weight ?? 0),
+      firstSeen: dateEntries.find(([, dateRows]) => dateRows.has(name))?.[0] ?? latestDate ?? '',
+      lastSeen: latestDate ?? '',
+      vwap: value.weight > 0 ? value.vwapWeightedValue / value.weight : 0,
+      volume: value.volume,
+      market_value: value.market_value,
+      qualities: Array.from(value.qualities).sort((a, b) => a - b),
+    }))
+    .sort((a, b) => b.currentWeight - a.currentWeight)
+
+  const keyChanges = allKeys.map((name) => ({
+    name,
+    change: (latestRows?.get(name)?.weight ?? 0) - (firstRows?.get(name)?.weight ?? 0),
+  }))
+  const firstSeen = allKeys.map((name) => ({
+    name,
+    firstSeen: dateEntries.find(([, dateRows]) => dateRows.has(name))?.[0] ?? '',
+  }))
+  const consistency = allKeys.map((name) => ({
+    name,
+    days: dateEntries.filter(([, dateRows]) => dateRows.has(name)).length,
+  }))
+
+  const summary: CompositionSummary = {
+    largest: currentTableRows[0]
+      ? { name: currentTableRows[0].name, weight: currentTableRows[0].currentWeight }
+      : undefined,
+    biggestIncrease: keyChanges.sort((a, b) => b.change - a.change)[0],
+    biggestDecrease: keyChanges.sort((a, b) => a.change - b.change)[0],
+    newestEntry: firstSeen.sort((a, b) => b.firstSeen.localeCompare(a.firstSeen))[0],
+    mostConsistent: consistency.sort((a, b) => b.days - a.days)[0],
+  }
+
+  return {
+    chartRows,
+    keys: chartRows.some((row) => typeof row.Other === 'number') ? [...topKeys, 'Other'] : topKeys,
+    summary,
+    tableRows: currentTableRows,
+  }
 }
 
 function buildComparisonRows(
@@ -2749,9 +2967,16 @@ function App() {
   const [compareMode, setCompareMode] = useState<CompareMode>(storedComparisonState.mode ?? 'percent')
   const [compareMetric, setCompareMetric] = useState<CompareMetric>(storedComparisonState.metric ?? 'vwap')
   const [compareTimeframe, setCompareTimeframe] = useState<Timeframe>(
-    normalizeTimeframe(storedComparisonState.timeframe ?? '1m'),
+    normalizeTimeframe(storedComparisonState.timeframe ?? '30d'),
   )
   const [comparisonHeight, setComparisonHeight] = useState(storedComparisonState.height ?? 460)
+  const [compositionIndex, setCompositionIndex] = useState<IndexCode>('total_market')
+  const [compositionRealm, setCompositionRealm] = useState<RealmId>(0)
+  const [compositionTimeframe, setCompositionTimeframe] = useState<Timeframe>('30d')
+  const [compositionGrouping, setCompositionGrouping] = useState<CompositionGrouping>('resource_quality')
+  const [compositionTopCount, setCompositionTopCount] = useState<CompositionTopCount>(10)
+  const [compositionRows, setCompositionRows] = useState<CompositionComponentRow[]>([])
+  const [isCompositionLoading, setIsCompositionLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
   const [comparisonPresets, setComparisonPresets] = useState<ComparisonPreset[]>(() =>
     readJsonStorage<ComparisonPreset[]>(comparisonPresetsKey, []),
@@ -2870,6 +3095,12 @@ function App() {
             })
             .filter((item) => item.signal),
     [activeComparisonKeys, comparisonSeries, compareTimeframe],
+  )
+  const compositionDefinition =
+    allIndexDefinitions.find((item) => item.code === compositionIndex) ?? indexDefinitions[0]
+  const compositionView = useMemo(
+    () => buildCompositionView(compositionRows, compositionGrouping, compositionTopCount),
+    [compositionRows, compositionGrouping, compositionTopCount],
   )
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -3059,6 +3290,35 @@ function App() {
       setSelectedIndex(qualityIndexCode(0, q0IncludesResearch))
     }
   }, [q0IncludesResearch, selectedIndex])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function refreshComposition() {
+      const cacheKey = `composition:${compositionRealm}:${compositionIndex}:${compositionTimeframe}`
+      const cached = readDataCache<CompositionComponentRow[]>(cacheKey)
+      if (cached) {
+        setCompositionRows(cached)
+      }
+
+      setIsCompositionLoading(true)
+      const loadedRows = await loadCompositionComponents(compositionRealm, compositionIndex, compositionTimeframe)
+
+      if (!isCurrent) return
+
+      setCompositionRows(loadedRows ?? [])
+      if (loadedRows) {
+        writeDataCache(cacheKey, loadedRows)
+      }
+      setIsCompositionLoading(false)
+    }
+
+    refreshComposition()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [compositionRealm, compositionIndex, compositionTimeframe, dataRefreshToken])
 
   useEffect(() => {
     if (comparisonKind === 'resource' && storedComparisonState.selectedQuality === undefined) {
@@ -3366,6 +3626,15 @@ function App() {
     setActiveView('compare')
   }
 
+  function viewCurrentComposition() {
+    setCompositionRealm(realm)
+    setCompositionIndex(selectedIndex)
+    setCompositionTimeframe('30d')
+    setCompositionGrouping('resource_quality')
+    setCompositionTopCount(10)
+    setActiveView('composition')
+  }
+
   function selectView(view: AppView) {
     setActiveView(view)
     setIsMobileNavOpen(false)
@@ -3376,7 +3645,7 @@ function App() {
     setDataRefreshToken((current) => current + 1)
   }
 
-  const isAnyMarketDataLoading = isLoading || isDashboardLoading || isComparisonLoading
+  const isAnyMarketDataLoading = isLoading || isDashboardLoading || isComparisonLoading || isCompositionLoading
   const chartOverlayControls = (
     <section className="chart-overlay-controls" aria-label="Chart overlays">
       <button
@@ -3537,6 +3806,14 @@ function App() {
           Comparisons
         </button>
         <button
+          className={activeView === 'composition' ? 'active' : ''}
+          onClick={() => selectView('composition')}
+          type="button"
+        >
+          <Layers size={16} />
+          Composition
+        </button>
+        <button
           className={activeView === 'tools' ? 'active' : ''}
           onClick={() => selectView('tools')}
           type="button"
@@ -3554,7 +3831,7 @@ function App() {
         </button>
       </nav>
 
-      {activeView !== 'compare' && chartOverlayControls}
+      {activeView !== 'compare' && activeView !== 'composition' && chartOverlayControls}
 
       {activeView === 'dashboard' && (
         <section className="clean-dashboard view-panel">
@@ -3868,7 +4145,7 @@ function App() {
                 <Database size={17} />
                 {usingDemoData
                   ? 'Live market history appears here after the database is connected.'
-                  : 'Updated from the latest collected market snapshot.'}
+                  : 'Updated from the latest collected market snapshot. The site keeps the latest 90 days of market data.'}
               </div>
             </aside>
           </section>
@@ -3879,10 +4156,16 @@ function App() {
                 <p className="eyebrow">Current Basket</p>
                 <h2>All Components</h2>
               </div>
-              <span className="loading-state">
-                <RefreshCw className={isLoading ? 'spin' : ''} size={15} />
-                {isLoading ? 'Refreshing' : 'Ready'}
-              </span>
+              <div className="panel-actions">
+                <button className="ghost-button" onClick={viewCurrentComposition} type="button">
+                  <Layers size={15} />
+                  View Composition
+                </button>
+                <span className="loading-state">
+                  <RefreshCw className={isLoading ? 'spin' : ''} size={15} />
+                  {isLoading ? 'Refreshing' : 'Ready'}
+                </span>
+              </div>
             </div>
 
             <div className="table-wrap">
@@ -4032,14 +4315,9 @@ function App() {
               >
                 <option value="7d">7D</option>
                 <option value="14d">14D</option>
-                <option value="1m">1M</option>
-                <option value="2m">2M</option>
-                <option value="3m">3M</option>
-                <option value="6m">6M</option>
-                <option value="9m">9M</option>
-                <option value="1y">1Y</option>
-                <option value="18m">18M</option>
-                <option value="2y">2Y</option>
+                <option value="30d">30D</option>
+                <option value="60d">60D</option>
+                <option value="90d">90D</option>
                 <option value="all">All</option>
               </select>
             </label>
@@ -4236,6 +4514,232 @@ function App() {
             </ResponsiveContainer>
           </div>
         </section>
+      ) : activeView === 'composition' ? (
+        <section className="composition-panel view-panel">
+          <div className="panel-header comparison-heading">
+            <div>
+              <p className="eyebrow">Composition</p>
+              <h2>Basket changes over time</h2>
+              <p>Track which resources are driving an index by weight across the retained 90-day window.</p>
+            </div>
+            <span className="loading-state">
+              <RefreshCw className={isCompositionLoading ? 'spin' : ''} size={15} />
+              {isCompositionLoading ? 'Refreshing' : 'Ready'}
+            </span>
+          </div>
+
+          <div className="composition-controls">
+            <label>
+              Realm
+              <select
+                value={compositionRealm}
+                onChange={(event) => setCompositionRealm(Number(event.target.value) as RealmId)}
+              >
+                {Object.entries(realms).map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Index
+              <select value={compositionIndex} onChange={(event) => setCompositionIndex(event.target.value)}>
+                {allIndexDefinitions.map((index) => (
+                  <option key={index.code} value={index.code}>
+                    {index.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Timeframe
+              <select
+                value={compositionTimeframe}
+                onChange={(event) => setCompositionTimeframe(event.target.value as Timeframe)}
+              >
+                <option value="7d">7D</option>
+                <option value="14d">14D</option>
+                <option value="30d">30D</option>
+                <option value="60d">60D</option>
+                <option value="90d">90D</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+            <label>
+              Grouping
+              <select
+                value={compositionGrouping}
+                onChange={(event) => setCompositionGrouping(event.target.value as CompositionGrouping)}
+              >
+                <option value="resource_quality">Resource + quality</option>
+                <option value="resource">Resource</option>
+              </select>
+            </label>
+            <label>
+              Components
+              <select
+                value={compositionTopCount}
+                onChange={(event) => setCompositionTopCount(Number(event.target.value) as CompositionTopCount)}
+              >
+                <option value={10}>Top 10</option>
+                <option value={20}>Top 20</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="composition-grid">
+            <section className="composition-chart-panel">
+              <div className="composition-title-row">
+                <div>
+                  <p className="eyebrow">{realms[compositionRealm]}</p>
+                  <h3>{compositionDefinition.name}</h3>
+                  <p>{compositionDefinition.description}</p>
+                </div>
+              </div>
+              <div className="composition-chart">
+                {compositionView.chartRows.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={compositionView.chartRows} margin={{ top: 8, right: 18, left: 0, bottom: 22 }}>
+                      <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 5" vertical={false} />
+                      <XAxis
+                        dataKey="date"
+                        interval="preserveStartEnd"
+                        minTickGap={28}
+                        tickFormatter={shortDateLabel}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+                        tickLine={false}
+                        axisLine={false}
+                        width={58}
+                      />
+                      <Tooltip
+                        offset={50}
+                        formatter={(value, name) => [`${Number(value).toFixed(2)}%`, name]}
+                        labelFormatter={(label) => formatDisplayDate(String(label))}
+                        contentStyle={{
+                          background: 'var(--tooltip-bg)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          color: 'var(--heading)',
+                        }}
+                      />
+                      {compositionView.keys.map((key, index) => (
+                        <Area
+                          dataKey={key}
+                          fill={compositionColors[index % compositionColors.length]}
+                          fillOpacity={0.72}
+                          key={key}
+                          stackId="composition"
+                          stroke={compositionColors[index % compositionColors.length]}
+                          strokeWidth={1}
+                          type="monotone"
+                        />
+                      ))}
+                      <Brush
+                        dataKey="date"
+                        fill="var(--brush-track)"
+                        height={18}
+                        travellerWidth={8}
+                        tickFormatter={shortDateLabel}
+                        stroke="var(--brush-border)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="empty-state">No composition history found for this index yet.</div>
+                )}
+              </div>
+            </section>
+
+            <aside className="composition-summary">
+              <article>
+                <span>Largest Now</span>
+                <strong>{compositionView.summary.largest?.name ?? 'No data'}</strong>
+                <small>{compositionView.summary.largest ? formatPercent(compositionView.summary.largest.weight) : '-'}</small>
+              </article>
+              <article>
+                <span>Biggest Increase</span>
+                <strong>{compositionView.summary.biggestIncrease?.name ?? 'No data'}</strong>
+                <small>
+                  {compositionView.summary.biggestIncrease
+                    ? formatPercent(compositionView.summary.biggestIncrease.change)
+                    : '-'}
+                </small>
+              </article>
+              <article>
+                <span>Biggest Decrease</span>
+                <strong>{compositionView.summary.biggestDecrease?.name ?? 'No data'}</strong>
+                <small>
+                  {compositionView.summary.biggestDecrease
+                    ? formatPercent(compositionView.summary.biggestDecrease.change)
+                    : '-'}
+                </small>
+              </article>
+              <article>
+                <span>Newest Entry</span>
+                <strong>{compositionView.summary.newestEntry?.name ?? 'No data'}</strong>
+                <small>
+                  {compositionView.summary.newestEntry?.firstSeen
+                    ? formatDisplayDate(compositionView.summary.newestEntry.firstSeen)
+                    : '-'}
+                </small>
+              </article>
+              <article>
+                <span>Most Consistent</span>
+                <strong>{compositionView.summary.mostConsistent?.name ?? 'No data'}</strong>
+                <small>
+                  {compositionView.summary.mostConsistent
+                    ? `${compositionView.summary.mostConsistent.days} days`
+                    : '-'}
+                </small>
+              </article>
+            </aside>
+          </div>
+
+          <section className="components-panel composition-table">
+            <div className="panel-header compact">
+              <div>
+                <p className="eyebrow">Latest Composition</p>
+                <h2>Current component weights</h2>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Current Weight</th>
+                    <th>Change</th>
+                    <th>First Seen</th>
+                    <th>VWAP</th>
+                    <th>Volume</th>
+                    <th>Market Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {compositionView.tableRows.map((row) => (
+                    <tr key={row.name}>
+                      <td>
+                        <strong>{row.name}</strong>
+                      </td>
+                      <td>{formatPercent(row.currentWeight)}</td>
+                      <td className={row.change >= 0 ? 'positive' : 'negative'}>{formatPercent(row.change)}</td>
+                      <td>{formatDisplayDate(row.firstSeen)}</td>
+                      <td>{formatNumber(row.vwap)}</td>
+                      <td>{formatCompact(row.volume)}</td>
+                      <td>{formatCompact(row.market_value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
       ) : activeView === 'tools' ? (
         <section className="tools-panel view-panel">
           <div className="panel-header">
@@ -4279,7 +4783,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.1.13</strong>
+              <strong>v1.2.0</strong>
             </div>
           </div>
 

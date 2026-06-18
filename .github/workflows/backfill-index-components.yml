@@ -1,0 +1,42 @@
+name: Backfill index components
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of latest market days to rebuild index components for"
+        required: true
+        default: "30"
+      realm:
+        description: "Realm to backfill: all, 0, or 1"
+        required: true
+        default: "all"
+
+jobs:
+  backfill-components:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: collector
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: collector/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Backfill index components
+        run: npm run backfill:components
+        env:
+          COMPONENT_BACKFILL_DAYS: ${{ inputs.days }}
+          BACKFILL_REALM: ${{ inputs.realm }}
+          SIMCO_SUPABASE_URL: ${{ secrets.SIMCO_SUPABASE_URL }}
+          SIMCO_SUPABASE_SECRET_KEY: ${{ secrets.SIMCO_SUPABASE_SECRET_KEY }}
