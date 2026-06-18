@@ -2257,6 +2257,72 @@ function bottomOverlayDy(row: number) {
   return -8 - row * 14
 }
 
+function closestChartDatum<T extends { date: string }>(rows: T[], date: string) {
+  if (!rows.length) {
+    return null
+  }
+
+  const target = Date.parse(`${date}T00:00:00Z`)
+  return rows.reduce((closest, row) => {
+    const rowDistance = Math.abs(Date.parse(`${row.date}T00:00:00Z`) - target)
+    const closestDistance = Math.abs(Date.parse(`${closest.date}T00:00:00Z`) - target)
+    return rowDistance < closestDistance ? row : closest
+  }, rows[0])
+}
+
+function chartValuePosition(
+  rows: Array<{ date: string } & Record<string, string | number | undefined>>,
+  valueKeys: string[],
+  date: string,
+) {
+  const values = rows.flatMap((row) =>
+    valueKeys
+      .map((key) => row[key])
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
+  )
+  const datum = closestChartDatum(rows, date)
+  const localValues = datum
+    ? valueKeys
+        .map((key) => datum[key])
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    : []
+
+  if (!values.length || !localValues.length) {
+    return 0.5
+  }
+
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min
+  if (range <= 0) {
+    return 0.5
+  }
+
+  const localAverage = localValues.reduce((sum, value) => sum + value, 0) / localValues.length
+  return (localAverage - min) / range
+}
+
+function orderLabelPlacement(
+  rows: Array<{ date: string } & Record<string, string | number | undefined>>,
+  valueKeys: string[],
+  orderDate: string,
+  row: number,
+) {
+  const position = chartValuePosition(rows, valueKeys, orderDate)
+
+  if (position < 0.45) {
+    return {
+      dy: topOverlayDy(row),
+      position: 'insideTopLeft' as const,
+    }
+  }
+
+  return {
+    dy: bottomOverlayDy(row),
+    position: 'insideBottomLeft' as const,
+  }
+}
+
 function renderContextOverlays(
   context: ChartContext,
   showPhases: boolean,
@@ -2265,6 +2331,8 @@ function renderContextOverlays(
   showOrders: boolean,
   keyPrefix: string,
   yAxisId?: string,
+  chartRows: Array<{ date: string } & Record<string, string | number | undefined>> = [],
+  valueKeys: string[] = ['value'],
 ) {
   const contests = recentContests(context.contests)
   const orders = recentGovernmentOrders(context.governmentOrders)
@@ -2365,6 +2433,13 @@ function renderContextOverlays(
         orders.flatMap((order, index) => {
           const color = orderLineColor(order)
           const label = orderChartLabel(order, multiRealm)
+          const labelRow = (index + contests.length) % 4
+          const placement = orderLabelPlacement(
+            chartRows,
+            valueKeys,
+            toDateOnly(order.created_at),
+            labelRow,
+          )
 
           return [
             <ReferenceLine
@@ -2376,8 +2451,8 @@ function renderContextOverlays(
                 fill: color,
                 fontSize: 11,
                 dx: -142,
-                dy: bottomOverlayDy((index + contests.length) % 4),
-                position: 'insideBottomLeft',
+                dy: placement.dy,
+                position: placement.position,
               }}
               stroke={color}
               strokeDasharray="2 5"
@@ -2975,6 +3050,7 @@ function App() {
   const [compositionTimeframe, setCompositionTimeframe] = useState<Timeframe>('30d')
   const [compositionGrouping, setCompositionGrouping] = useState<CompositionGrouping>('resource_quality')
   const [compositionTopCount, setCompositionTopCount] = useState<CompositionTopCount>(10)
+  const [compositionShowOther, setCompositionShowOther] = useState(true)
   const [compositionRows, setCompositionRows] = useState<CompositionComponentRow[]>([])
   const [isCompositionLoading, setIsCompositionLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
@@ -4097,6 +4173,9 @@ function App() {
                       showContests,
                       showOrders,
                       'overview',
+                      undefined,
+                      visibleSeries,
+                      ['value'],
                     )}
                     {showTechnicals &&
                       renderTechnicalOverlays(
@@ -4440,6 +4519,8 @@ function App() {
                   showOrders,
                   'comparison',
                   'value',
+                  comparisonSeries,
+                  activeComparisonKeys,
                 )}
                 {showTechnicals &&
                   comparisonTechnicals.map((item) =>
@@ -4586,6 +4667,16 @@ function App() {
                 <option value={20}>Top 20</option>
               </select>
             </label>
+            <label className="toggle-field">
+              Other
+              <button
+                className={compositionShowOther ? 'active' : ''}
+                onClick={() => setCompositionShowOther((current) => !current)}
+                type="button"
+              >
+                {compositionShowOther ? 'Shown' : 'Hidden'}
+              </button>
+            </label>
           </div>
 
           <div className="composition-grid">
@@ -4628,7 +4719,9 @@ function App() {
                           color: 'var(--heading)',
                         }}
                       />
-                      {compositionView.keys.map((key, index) => (
+                      {compositionView.keys
+                        .filter((key) => compositionShowOther || key !== 'Other')
+                        .map((key, index) => (
                         <Area
                           dataKey={key}
                           fill={compositionColors[index % compositionColors.length]}

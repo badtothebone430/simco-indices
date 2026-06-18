@@ -662,8 +662,8 @@ function indexSpecRows(dateRows) {
   ]
 }
 
-function buildBackfillIndices(realm, rows, dates) {
-  const previousValues = new Map()
+function buildBackfillIndices(realm, rows, dates, initialValues = new Map()) {
+  const previousValues = new Map(initialValues)
   const indexValues = []
   const indexComponents = []
 
@@ -712,6 +712,33 @@ function buildBackfillIndices(realm, rows, dates) {
   }
 
   return { indexValues, indexComponents }
+}
+
+async function loadPreviousIndexValues(supabase, realm, startDate) {
+  if (!startDate) {
+    return new Map()
+  }
+
+  const { data, error } = await supabase
+    .from('index_values')
+    .select('index_code,value,date')
+    .eq('realm_id', realm)
+    .lt('date', startDate)
+    .order('date', { ascending: false })
+    .limit(500)
+
+  if (error) {
+    throw new Error(`previous index seed lookup failed: ${error.message}`)
+  }
+
+  const previousValues = new Map()
+  for (const row of data ?? []) {
+    if (!previousValues.has(row.index_code)) {
+      previousValues.set(row.index_code, Number(row.value))
+    }
+  }
+
+  return previousValues
 }
 
 async function upsertInChunks(supabase, table, rows, onConflict) {
@@ -832,7 +859,18 @@ async function backfillRealm(supabase, realm) {
   const targetDates = targetDatesFromRows(allRows)
   const targetDateSet = new Set(targetDates)
   const rows = allRows.filter((row) => targetDateSet.has(row.date))
-  const { indexValues, indexComponents } = buildBackfillIndices(realm, rows, targetDates)
+  const initialIndexValues = await loadPreviousIndexValues(supabase, realm, targetDates[0])
+  if (initialIndexValues.size > 0) {
+    console.log(
+      `Realm ${realm}: seeded ${initialIndexValues.size} index values before ${targetDates[0]}`,
+    )
+  }
+  const { indexValues, indexComponents } = buildBackfillIndices(
+    realm,
+    rows,
+    targetDates,
+    initialIndexValues,
+  )
 
   await upsertInChunks(supabase, 'market_daily', rows, 'realm_id,resource_id,quality,date')
   await upsertInChunks(supabase, 'index_values', indexValues, 'index_code,realm_id,date')

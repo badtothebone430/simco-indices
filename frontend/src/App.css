@@ -1342,7 +1342,8 @@
   font-weight: 700;
 }
 
-.composition-controls select {
+.composition-controls select,
+.toggle-field button {
   min-width: 0;
   height: 38px;
   padding: 0 10px;
@@ -1350,6 +1351,17 @@
   border-radius: 6px;
   color: var(--heading);
   background: var(--elevated);
+}
+
+.toggle-field button {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.toggle-field button.active {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
 }
 
 .composition-grid {
