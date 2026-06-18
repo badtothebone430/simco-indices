@@ -9,7 +9,7 @@ const BACKFILL_DAYS = Number(process.env.BACKFILL_DAYS ?? 30)
 const BACKFILL_START_DATE = process.env.BACKFILL_START_DATE ?? ''
 const BACKFILL_END_DATE = process.env.BACKFILL_END_DATE ?? ''
 const BACKFILL_REALM = process.env.BACKFILL_REALM ?? 'all'
-const BACKFILL_MAX_DAYS = Number(process.env.BACKFILL_MAX_DAYS ?? 366)
+const BACKFILL_MAX_DAYS = Number(process.env.BACKFILL_MAX_DAYS ?? 275)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 const startedAt = Date.now()
 

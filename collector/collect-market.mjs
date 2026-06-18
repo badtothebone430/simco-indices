@@ -5,7 +5,7 @@ const REALMS = [0, 1]
 const RATE_LIMIT_DELAY_MS = 2500
 const MAX_FETCH_ATTEMPTS = 5
 const BASE_INDEX_VALUE = 1000
-const DATA_RETENTION_DAYS = Number(process.env.DATA_RETENTION_DAYS ?? 366)
+const DATA_RETENTION_DAYS = Number(process.env.DATA_RETENTION_DAYS ?? 275)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 const startedAt = Date.now()
 
