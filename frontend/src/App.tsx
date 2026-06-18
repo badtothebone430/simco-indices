@@ -1236,31 +1236,11 @@ async function loadResourceMiniSeries(
 }
 
 async function loadResourceSignal(realm: RealmId): Promise<DashboardSignal | null> {
-  const supabase = getSupabase()
-  if (!supabase) {
+  const rows = await loadPagedMarketDailyRows(realm, 2)
+  if (!rows.length) {
     return null
   }
 
-  const { data, error } = await supabase
-    .from('market_daily')
-    .select('date,resource_id,resource_name,quality,vwap,volume,market_value')
-    .eq('realm_id', realm)
-    .order('date', { ascending: false })
-    .limit(3200)
-
-  if (error || !data?.length) {
-    return null
-  }
-
-  const rows = data as Array<{
-    date: string
-    resource_id: number
-    resource_name: string
-    quality: number
-    vwap: number
-    volume: number
-    market_value: number
-  }>
   const dates = Array.from(new Set(rows.map((row) => row.date))).sort().slice(-2)
   const [previousDate, latestDate] = dates
   if (!previousDate || !latestDate) {
@@ -1349,7 +1329,7 @@ async function loadPagedMarketDailyRows(realm: RealmId, targetDateCount = 12) {
     rows.push(...page)
     page.forEach((row) => dates.add(row.date))
 
-    if (dates.size >= targetDateCount || page.length < pageSize) {
+    if (dates.size > targetDateCount || page.length < pageSize) {
       break
     }
   }
@@ -1962,7 +1942,6 @@ function contextForSelections(context: ChartContext, selections: ComparisonSelec
 function recentContests(contests: RealmContest[]) {
   return [...contests]
     .sort((a, b) => b.start_at.localeCompare(a.start_at))
-    .slice(0, 1)
 }
 
 function eventLabel(events: RealmEvent[]) {
