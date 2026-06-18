@@ -2063,6 +2063,20 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
   const supplyTouches = values.filter((value) => value >= supplyZone[0] - zoneSize * 0.35 && value <= supplyZone[1] + zoneSize * 0.35).length
   const hasDemandZone = demandTouches >= 2
   const hasSupplyZone = supplyTouches >= 2
+  const insideDemand = latest >= demandZone[0] && latest <= demandZone[1]
+  const insideSupply = latest >= supplyZone[0] && latest <= supplyZone[1]
+  const demandSetup =
+    nearDemand && demandProximity >= 0.62 && demandTouches >= 2
+      ? {
+          score: demandProximity + (insideDemand ? 0.45 : 0),
+        }
+      : null
+  const supplySetup =
+    nearSupply && supplyProximity >= 0.62 && supplyTouches >= 2
+      ? {
+          score: supplyProximity + (insideSupply ? 0.45 : 0),
+        }
+      : null
   const channelKind =
     channelIsClean && Math.abs(slope) >= slopeThreshold
       ? slope > 0
@@ -2071,8 +2085,10 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
       : null
   const channelStrength = channelKind ? Math.min(Math.abs(slope) / Math.max(slopeThreshold, 0.000001), 3) / 3 : 0
   const channelLabel = channelKind === 'ascending-channel' ? 'Ascending Channel' : 'Descending Channel'
+  const shouldUseSupply = supplySetup && (!demandSetup || supplySetup.score >= demandSetup.score)
+  const shouldUseDemand = demandSetup && !shouldUseSupply
 
-  if (nearDemand && demandProximity >= 0.62 && demandTouches >= 2) {
+  if (shouldUseDemand) {
     return {
       type: 'demand',
       title: 'Testing Demand',
@@ -2085,11 +2101,15 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
     }
   }
 
-  if (nearSupply && supplyProximity >= 0.62 && supplyTouches >= 2) {
+  if (shouldUseSupply) {
+    const supplyDetail = insideSupply
+      ? `Price is inside the recent supply zone around ${formatPriceLevel(supplyZone[0])}-${formatPriceLevel(supplyZone[1])}. Watch for either a breakout above supply or rejection back into the range.`
+      : `Price is near the recent supply zone around ${formatPriceLevel(supplyZone[0])}-${formatPriceLevel(supplyZone[1])}.`
+
     return {
       type: 'supply',
       title: 'Testing Supply',
-      detail: `Price is near the recent supply zone around ${formatPriceLevel(supplyZone[0])}-${formatPriceLevel(supplyZone[1])}.`,
+      detail: supplyDetail,
       tone: 'negative',
       strength: 1 + supplyProximity + channelStrength * 0.35,
       demandZone: hasDemandZone ? demandZone : undefined,
