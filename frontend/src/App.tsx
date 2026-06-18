@@ -297,6 +297,7 @@ type ChartFilters = {
   showEvents: boolean
   showContests: boolean
   showOrders: boolean
+  showUpdates: boolean
   showTechnicals: boolean
   showVolume: boolean
 }
@@ -471,6 +472,8 @@ const changelogEntries: ChangelogEntry[] = [
       'Tightened technical analysis signals and improved channel label placement.',
       'Added Composition tab for tracking index basket weight changes over time.',
       'Reduced stored composition history to 30 days to control database storage usage.',
+      'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
+      'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
     ],
   },
   {
@@ -519,6 +522,15 @@ const realms: Record<RealmId, string> = {
   0: 'Magnates',
   1: 'Entrepreneurs',
 }
+
+const fixedGameUpdates = [
+  { date: '2025-08-06', label: 'Research Rework' },
+  {
+    date: '2026-03-27',
+    endDate: '2026-04-16',
+    label: 'Retail Modelling Rework',
+  },
+]
 
 const qualityLevels = Array.from({ length: 13 }, (_, quality) => quality)
 const comparisonColors = ['#247a7b', '#b85b31', '#5b6ee1', '#21834f', '#9b4eb5', '#a98918']
@@ -2253,10 +2265,6 @@ function topOverlayDy(row: number) {
   return 12 + row * 14
 }
 
-function bottomOverlayDy(row: number) {
-  return -8 - row * 14
-}
-
 function closestChartDatum<T extends { date: string }>(rows: T[], date: string) {
   if (!rows.length) {
     return null
@@ -2304,28 +2312,85 @@ function chartValuePositionsInWindow(
   )
 }
 
-function orderLabelSlot(
+function valueToChartRatio(
   rows: Array<{ date: string } & Record<string, string | number | undefined>>,
   valueKeys: string[],
-  orderDate: string,
-  dueDate: string | null | undefined,
+  value: number,
+) {
+  const values = rows.flatMap((row) =>
+    valueKeys
+      .map((key) => row[key])
+      .filter((item): item is number => typeof item === 'number' && Number.isFinite(item)),
+  )
+  if (!values.length || !Number.isFinite(value)) {
+    return null
+  }
+
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min
+  if (range <= 0) {
+    return null
+  }
+
+  return 1 - (value - min) / range
+}
+
+function technicalReservedLabelRatios(
+  signal: TechnicalSignal | null,
+  rows: Array<{ date: string } & Record<string, string | number | undefined>>,
+  valueKeys: string[],
+) {
+  if (!signal) {
+    return []
+  }
+
+  const ratios: number[] = []
+  if (signal.demandZone) {
+    const ratio = valueToChartRatio(rows, valueKeys, signal.demandZone[0])
+    if (ratio !== null) ratios.push(Math.min(0.96, ratio + 0.05))
+  }
+  if (signal.supplyZone) {
+    const ratio = valueToChartRatio(rows, valueKeys, signal.supplyZone[1])
+    if (ratio !== null) ratios.push(Math.max(0.04, ratio - 0.05))
+  }
+  if (signal.channel) {
+    const channelValue =
+      Math.abs((rows.at(-1)?.value as number | undefined ?? 0) - signal.channel.upper[1]) <
+      Math.abs((rows.at(-1)?.value as number | undefined ?? 0) - signal.channel.lower[1])
+        ? signal.channel.lower[1]
+        : signal.channel.upper[1]
+    const ratio = valueToChartRatio(rows, valueKeys, channelValue)
+    if (ratio !== null) ratios.push(ratio)
+  }
+
+  return ratios
+}
+
+function safeOverlayLabelSlot(
+  rows: Array<{ date: string } & Record<string, string | number | undefined>>,
+  valueKeys: string[],
+  startDate: string,
+  endDate: string | null | undefined,
   row: number,
+  reservedRatios: number[] = [],
 ) {
   const candidates = [0.08, 0.145, 0.21, 0.285, 0.36, 0.44, 0.56, 0.64, 0.715, 0.79, 0.855, 0.92]
-  const orderIndex = rows.findIndex((chartRow) => chartRow.date >= orderDate)
-  const dueIndex = dueDate ? rows.findIndex((chartRow) => chartRow.date >= dueDate) : -1
-  const labelStartIndex = Math.max(0, (orderIndex >= 0 ? orderIndex : rows.length - 1) - Math.ceil(rows.length * 0.18))
-  const labelEndIndex = dueIndex >= 0 ? dueIndex : rows.length - 1
+  const startIndex = rows.findIndex((chartRow) => chartRow.date >= startDate)
+  const endIndex = endDate ? rows.findIndex((chartRow) => chartRow.date >= endDate) : -1
+  const labelStartIndex = Math.max(0, (startIndex >= 0 ? startIndex : rows.length - 1) - Math.ceil(rows.length * 0.18))
+  const labelEndIndex = endIndex >= 0 ? endIndex : rows.length - 1
   const labelRows = rows.slice(labelStartIndex, Math.max(labelStartIndex + 1, labelEndIndex + 1))
   const priceYRatios = chartValuePositionsInWindow(
     labelRows.length ? labelRows : rows,
     valueKeys,
-    labelRows.at(0)?.date ?? orderDate,
-    labelRows.at(-1)?.date ?? dueDate,
+    labelRows.at(0)?.date ?? startDate,
+    labelRows.at(-1)?.date ?? endDate,
   )
+  const blockedRatios = [...priceYRatios, ...reservedRatios]
   const rankedSlots = candidates
     .map((slot) => {
-      const priceClearance = Math.min(...priceYRatios.map((priceYRatio) => Math.abs(slot - priceYRatio)))
+      const priceClearance = Math.min(...blockedRatios.map((priceYRatio) => Math.abs(slot - priceYRatio)))
       return {
         slot,
         score: priceClearance,
@@ -2336,22 +2401,24 @@ function orderLabelSlot(
   return rankedSlots[row % rankedSlots.length]?.slot ?? 0.82
 }
 
-function OrderReferenceLabel({
+function OverlayReferenceLabel({
   color,
   label,
   slot,
   viewBox,
+  xOffset = -148,
 }: {
   color: string
   label: string
   slot: number
   viewBox?: unknown
+  xOffset?: number
 }) {
   const box =
     viewBox && typeof viewBox === 'object'
       ? viewBox as { x?: unknown; y?: unknown; height?: unknown }
       : {}
-  const x = Number(box.x ?? 0) - 148
+  const x = Number(box.x ?? 0) + xOffset
   const y = Number(box.y ?? 0) + Number(box.height ?? 0) * slot
   return (
     <text fill={color} fontSize={11} textAnchor="start" x={x} y={y}>
@@ -2366,10 +2433,12 @@ function renderContextOverlays(
   showEvents: boolean,
   showContests: boolean,
   showOrders: boolean,
+  showUpdates: boolean,
   keyPrefix: string,
   yAxisId?: string,
   chartRows: Array<{ date: string } & Record<string, string | number | undefined>> = [],
   valueKeys: string[] = ['value'],
+  reservedLabelRatios: number[] = [],
 ) {
   const contests = recentContests(context.contests)
   const orders = recentGovernmentOrders(context.governmentOrders)
@@ -2411,6 +2480,14 @@ function renderContextOverlays(
           const label = `${multiRealm ? `${realms[first.realm_id]}: ` : ''}${eventLabel(events)}`
           const color = eventLineColor(events)
           const labelRow = 2 + (index % 4)
+          const slot = safeOverlayLabelSlot(
+            chartRows,
+            valueKeys,
+            toDateOnly(first.since),
+            toDateOnly(first.until),
+            labelRow,
+            reservedLabelRatios,
+          )
 
           return [
             <ReferenceLine
@@ -2418,11 +2495,9 @@ function renderContextOverlays(
               ifOverflow="visible"
               key={`${keyPrefix}-event-start-${first.realm_id}-${first.since}-${first.until}`}
               label={{
-                value: label,
-                fill: color,
-                fontSize: 11,
-                dy: topOverlayDy(labelRow),
-                position: 'insideTopLeft',
+                content: (props) => (
+                  <OverlayReferenceLabel color={color} label={label} slot={slot} viewBox={props.viewBox} xOffset={8} />
+                ),
               }}
               stroke={color}
               strokeDasharray="4 4"
@@ -2439,20 +2514,29 @@ function renderContextOverlays(
           ]
         })}
       {showContests &&
-        contests.flatMap((contest, index) => (
-          [
+        contests.flatMap((contest, index) => {
+          const color = contestLineColor(contest)
+          const label = `${multiRealm ? `${realms[contest.realm_id]}: ` : ''}${contest.name}`
+          const slot = safeOverlayLabelSlot(
+            chartRows,
+            valueKeys,
+            toDateOnly(contest.start_at),
+            toDateOnly(contest.end_at),
+            index,
+            reservedLabelRatios,
+          )
+
+          return [
             <ReferenceLine
               {...axisProps}
               ifOverflow="visible"
               key={`${keyPrefix}-contest-start-${contest.realm_id}-${contest.contest_id}`}
               label={{
-                value: `${multiRealm ? `${realms[contest.realm_id]}: ` : ''}${contest.name}`,
-                fill: contestLineColor(contest),
-                fontSize: 11,
-                dy: bottomOverlayDy(index),
-                position: 'insideBottomLeft',
+                content: (props) => (
+                  <OverlayReferenceLabel color={color} label={label} slot={slot} viewBox={props.viewBox} xOffset={8} />
+                ),
               }}
-              stroke={contestLineColor(contest)}
+              stroke={color}
               strokeDasharray="4 4"
               x={toDateOnly(contest.start_at)}
             />,
@@ -2460,23 +2544,24 @@ function renderContextOverlays(
               {...axisProps}
               ifOverflow="visible"
               key={`${keyPrefix}-contest-end-${contest.realm_id}-${contest.contest_id}`}
-              stroke={contestLineColor(contest)}
+              stroke={color}
               strokeDasharray="4 4"
               x={toDateOnly(contest.end_at)}
             />,
           ]
-        ))}
+        })}
       {showOrders &&
         orders.flatMap((order, index) => {
           const color = orderLineColor(order)
           const label = orderChartLabel(order, multiRealm)
           const labelRow = (index + contests.length) % 4
-          const slot = orderLabelSlot(
+          const slot = safeOverlayLabelSlot(
             chartRows,
             valueKeys,
             toDateOnly(order.created_at),
             order.due_at ? toDateOnly(order.due_at) : null,
             labelRow,
+            reservedLabelRatios,
           )
 
           return [
@@ -2486,7 +2571,7 @@ function renderContextOverlays(
               key={`${keyPrefix}-order-start-${order.realm_id}-${order.order_id}-${order.resource_id}-${order.quality}`}
               label={{
                 content: (props) => (
-                  <OrderReferenceLabel
+                  <OverlayReferenceLabel
                     color={color}
                     label={label}
                     slot={slot}
@@ -2506,6 +2591,49 @@ function renderContextOverlays(
                 stroke={color}
                 strokeDasharray="2 5"
                 x={toDateOnly(order.due_at)}
+              />
+            ) : null,
+          ]
+        })}
+      {showUpdates &&
+        fixedGameUpdates.map((update, index) => {
+          const slot = safeOverlayLabelSlot(
+            chartRows,
+            valueKeys,
+            update.date,
+            update.endDate ?? null,
+            index,
+            reservedLabelRatios,
+          )
+
+          return [
+            <ReferenceLine
+              {...axisProps}
+              ifOverflow="visible"
+              key={`${keyPrefix}-fixed-update-${update.date}`}
+              label={{
+                content: (props) => (
+                  <OverlayReferenceLabel
+                    color="var(--warning)"
+                    label={update.label}
+                    slot={slot}
+                    viewBox={props.viewBox}
+                    xOffset={8}
+                  />
+                ),
+              }}
+              stroke="var(--warning)"
+              strokeDasharray="3 6"
+              x={update.date}
+            />,
+            update.endDate ? (
+              <ReferenceLine
+                {...axisProps}
+                ifOverflow="visible"
+                key={`${keyPrefix}-fixed-update-end-${update.endDate}`}
+                stroke="var(--warning)"
+                strokeDasharray="3 6"
+                x={update.endDate}
               />
             ) : null,
           ]
@@ -3102,6 +3230,7 @@ function App() {
   const [showEvents, setShowEvents] = useState(Boolean(storedChartFilters.showEvents))
   const [showContests, setShowContests] = useState(Boolean(storedChartFilters.showContests))
   const [showOrders, setShowOrders] = useState(Boolean(storedChartFilters.showOrders))
+  const [showUpdates, setShowUpdates] = useState(Boolean(storedChartFilters.showUpdates))
   const [showTechnicals, setShowTechnicals] = useState(Boolean(storedChartFilters.showTechnicals))
   const [showVolume, setShowVolume] = useState(Boolean(storedChartFilters.showVolume))
   const [overviewContext, setOverviewContext] = useState<ChartContext>({
@@ -3195,6 +3324,13 @@ function App() {
     () => analyzeTechnicals(overviewTechnicalRows),
     [overviewTechnicalRows],
   )
+  const overviewReservedLabelRatios = useMemo(
+    () =>
+      showTechnicals
+        ? technicalReservedLabelRatios(overviewTechnicalSignal, visibleSeries, ['value'])
+        : [],
+    [overviewTechnicalSignal, showTechnicals, visibleSeries],
+  )
   const comparisonTechnicals = useMemo(
     () =>
       activeComparisonKeys.length >= 2
@@ -3211,6 +3347,15 @@ function App() {
             })
             .filter((item) => item.signal),
     [activeComparisonKeys, comparisonSeries, compareTimeframe],
+  )
+  const comparisonReservedLabelRatios = useMemo(
+    () =>
+      showTechnicals
+        ? comparisonTechnicals.flatMap((item) =>
+            technicalReservedLabelRatios(item.signal, comparisonSeries, [item.key]),
+          )
+        : [],
+    [comparisonTechnicals, comparisonSeries, showTechnicals],
   )
   const compositionDefinition =
     allIndexDefinitions.find((item) => item.code === compositionIndex) ?? indexDefinitions[0]
@@ -3303,11 +3448,12 @@ function App() {
       showEvents,
       showContests,
       showOrders,
+      showUpdates,
       showTechnicals,
       showVolume,
     }
     localStorage.setItem(chartFiltersKey, JSON.stringify(filters))
-  }, [showPhases, showEvents, showContests, showOrders, showTechnicals, showVolume])
+  }, [showPhases, showEvents, showContests, showOrders, showUpdates, showTechnicals, showVolume])
 
   useEffect(() => {
     let isCurrent = true
@@ -3793,6 +3939,13 @@ function App() {
         Show Orders
       </button>
       <button
+        className={showUpdates ? 'active' : ''}
+        onClick={() => setShowUpdates((current) => !current)}
+        type="button"
+      >
+        Show Updates
+      </button>
+      <button
         className={showTechnicals ? 'active' : ''}
         onClick={() => setShowTechnicals((current) => !current)}
         type="button"
@@ -4212,10 +4365,12 @@ function App() {
                       showEvents,
                       showContests,
                       showOrders,
+                      showUpdates,
                       'overview',
                       undefined,
                       visibleSeries,
                       ['value'],
+                      overviewReservedLabelRatios,
                     )}
                     {showTechnicals &&
                       renderTechnicalOverlays(
@@ -4557,10 +4712,12 @@ function App() {
                   showEvents,
                   showContests,
                   showOrders,
+                  showUpdates,
                   'comparison',
                   'value',
                   comparisonSeries,
                   activeComparisonKeys,
+                  comparisonReservedLabelRatios,
                 )}
                 {showTechnicals &&
                   comparisonTechnicals.map((item) =>
@@ -4916,7 +5073,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.2.0</strong>
+              <strong>v1.2.1</strong>
             </div>
           </div>
 
