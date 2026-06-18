@@ -60,6 +60,7 @@ type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
 type Timeframe = '7d' | '14d' | '30d' | '60d' | '90d' | 'all'
 type ResourceQualitySelection = number | 'weighted'
+type ChartCurve = 'smooth' | 'accurate'
 
 type IndexDefinition = {
   code: IndexCode
@@ -300,6 +301,7 @@ type ChartFilters = {
   showUpdates: boolean
   showTechnicals: boolean
   showVolume: boolean
+  chartCurve: ChartCurve
 }
 
 type TourStep = {
@@ -3242,6 +3244,9 @@ function App() {
   const [showUpdates, setShowUpdates] = useState(Boolean(storedChartFilters.showUpdates))
   const [showTechnicals, setShowTechnicals] = useState(Boolean(storedChartFilters.showTechnicals))
   const [showVolume, setShowVolume] = useState(Boolean(storedChartFilters.showVolume))
+  const [chartCurve, setChartCurve] = useState<ChartCurve>(
+    storedChartFilters.chartCurve === 'accurate' ? 'accurate' : 'smooth',
+  )
   const [overviewContext, setOverviewContext] = useState<ChartContext>({
     phases: [],
     events: [],
@@ -3460,9 +3465,10 @@ function App() {
       showUpdates,
       showTechnicals,
       showVolume,
+      chartCurve,
     }
     localStorage.setItem(chartFiltersKey, JSON.stringify(filters))
-  }, [showPhases, showEvents, showContests, showOrders, showUpdates, showTechnicals, showVolume])
+  }, [showPhases, showEvents, showContests, showOrders, showUpdates, showTechnicals, showVolume, chartCurve])
 
   useEffect(() => {
     let isCurrent = true
@@ -3968,6 +3974,13 @@ function App() {
       >
         Show Volume
       </button>
+      <button
+        className={chartCurve === 'accurate' ? 'active' : ''}
+        onClick={() => setChartCurve((current) => current === 'smooth' ? 'accurate' : 'smooth')}
+        type="button"
+      >
+        Chart: {chartCurve === 'smooth' ? 'Smooth' : 'Accurate'}
+      </button>
     </section>
   )
 
@@ -4389,7 +4402,7 @@ function App() {
                       )}
                     <Area
                       dataKey="value"
-                      type="monotone"
+                      type={chartCurve === 'smooth' ? 'monotone' : 'linear'}
                       stroke="var(--accent)"
                       strokeWidth={3}
                       fill="url(#indexFill)"
@@ -4785,7 +4798,7 @@ function App() {
                     name={comparisonLabel(selection)}
                     stroke={comparisonColors[index % comparisonColors.length]}
                     strokeWidth={3}
-                    type="monotone"
+                    type={chartCurve === 'smooth' ? 'monotone' : 'linear'}
                     yAxisId="value"
                   />
                 ))}
