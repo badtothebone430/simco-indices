@@ -10,6 +10,7 @@ const BACKFILL_START_DATE = process.env.BACKFILL_START_DATE ?? ''
 const BACKFILL_END_DATE = process.env.BACKFILL_END_DATE ?? ''
 const BACKFILL_REALM = process.env.BACKFILL_REALM ?? 'all'
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
+const startedAt = Date.now()
 
 const FOOD_RESOURCE_NAMES = new Set([
   'apple cider',
@@ -258,6 +259,86 @@ class SimcotoolsError extends Error {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  }
+
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+function etaFromProgress(completed, total, started = startedAt) {
+  if (completed <= 0 || total <= 0 || completed >= total) {
+    return '0s'
+  }
+
+  const elapsed = Date.now() - started
+  const remaining = (elapsed / completed) * (total - completed)
+  return formatDuration(remaining)
+}
+
+function workflowRunUrl() {
+  const serverUrl = process.env.GITHUB_SERVER_URL
+  const repository = process.env.GITHUB_REPOSITORY
+  const runId = process.env.GITHUB_RUN_ID
+
+  if (!serverUrl || !repository || !runId) {
+    return null
+  }
+
+  return `${serverUrl}/${repository}/actions/runs/${runId}`
+}
+
+async function sendDiscordWebhook(content) {
+  const webhookUrl = process.env.DISCORD_WEBHOOK
+  if (!webhookUrl) {
+    return
+  }
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    })
+
+    if (!response.ok) {
+      console.warn(`Discord webhook failed with ${response.status}`)
+    }
+  } catch (webhookError) {
+    console.warn(`Discord webhook failed: ${webhookError.message}`)
+  }
+}
+
+async function sendBackfillWebhook({ status, message, results, error }) {
+  const runUrl = workflowRunUrl()
+  const duration = formatDuration(Date.now() - startedAt)
+  const resultSummary = results
+    ?.map(
+      (result) =>
+        `Realm ${result.realm}: ${result.marketRows} market rows, ${result.indexValues} index rows, ${result.dates} dates`,
+    )
+    .join('\n')
+
+  await sendDiscordWebhook(
+    [
+      `Historical backfill ${status}.`,
+      message,
+      `Elapsed: ${duration}`,
+      resultSummary,
+      error ? `Error: ${error.message ?? String(error)}` : null,
+      runUrl ? `Run: ${runUrl}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  )
 }
 
 function retryDelayMs(response, attempt) {
@@ -644,6 +725,7 @@ function buildRowsFromCandles(realm, resource, quality, candlesticks) {
 }
 
 async function backfillRealm(supabase, realm) {
+  const realmStartedAt = Date.now()
   const context = await collectRealmContext(supabase, realm)
   const resources = await fetchResources(realm)
   const resourceById = new Map(resources.map((resource) => [resource.id, resource]))
@@ -652,7 +734,12 @@ async function backfillRealm(supabase, realm) {
   const allRows = []
   const skippedPairs = []
 
-  console.log(`Realm ${realm}: ${resources.length} resources, ${pairs.length} resource-quality pairs`)
+  const realmStartMessage = `Realm ${realm}: ${resources.length} resources, ${pairs.length} resource-quality pairs`
+  console.log(`${realmStartMessage} | elapsed ${formatDuration(Date.now() - startedAt)}`)
+  await sendBackfillWebhook({
+    status: 'started',
+    message: `${realmStartMessage}.`,
+  })
 
   await upsertInChunks(
     supabase,
@@ -695,8 +782,16 @@ async function backfillRealm(supabase, realm) {
       throw error
     }
 
-    if ((index + 1) % 50 === 0) {
-      console.log(`Realm ${realm}: fetched ${index + 1}/${pairs.length} candlestick series`)
+    const completed = index + 1
+    if (completed % 50 === 0 || completed === pairs.length) {
+      const progressMessage = `Realm ${realm}: fetched ${completed}/${pairs.length} candlestick series | elapsed ${formatDuration(
+        Date.now() - realmStartedAt,
+      )} | ETA ${etaFromProgress(completed, pairs.length, realmStartedAt)}`
+      console.log(progressMessage)
+      await sendBackfillWebhook({
+        status: 'progress',
+        message: progressMessage,
+      })
     }
   }
 
@@ -714,7 +809,7 @@ async function backfillRealm(supabase, realm) {
     'index_code,realm_id,date,resource_id,quality',
   )
 
-  return {
+  const result = {
     realm,
     pairs: pairs.length,
     skippedPairs,
@@ -724,6 +819,14 @@ async function backfillRealm(supabase, realm) {
     indexComponents: indexComponents.length,
     context,
   }
+
+  await sendBackfillWebhook({
+    status: 'realm complete',
+    message: `Realm ${realm}: wrote ${rows.length} market rows across ${targetDates.length} dates.`,
+    results: [result],
+  })
+
+  return result
 }
 
 async function main() {
@@ -740,14 +843,25 @@ async function main() {
 
   const results = []
   const realms = configuredRealms()
-  console.log(
+  const runMessage =
     BACKFILL_START_DATE || BACKFILL_END_DATE
       ? `Backfilling range ${BACKFILL_START_DATE} to ${BACKFILL_END_DATE} for realms ${realms.join(', ')}`
-      : `Backfilling latest ${BACKFILL_DAYS} market days for realms ${realms.join(', ')}`,
-  )
+      : `Backfilling latest ${BACKFILL_DAYS} market days for realms ${realms.join(', ')}`
+  console.log(`${runMessage} | elapsed ${formatDuration(Date.now() - startedAt)}`)
+  await sendBackfillWebhook({
+    status: 'started',
+    message: runMessage,
+  })
+
   for (const realm of realms) {
     results.push(await backfillRealm(supabase, realm))
   }
+
+  await sendBackfillWebhook({
+    status: 'completed',
+    message: `Finished historical backfill for realms ${realms.join(', ')}.`,
+    results,
+  })
 
   console.log(JSON.stringify({
     ok: true,
@@ -759,7 +873,12 @@ async function main() {
   }, null, 2))
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await sendBackfillWebhook({
+    status: 'failed',
+    message: 'Historical backfill failed before completion.',
+    error,
+  })
   console.error(error)
   process.exitCode = 1
 })
