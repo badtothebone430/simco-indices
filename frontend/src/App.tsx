@@ -3813,6 +3813,7 @@ function App() {
                       width={72}
                     />
                     <Tooltip
+                      offset={50} // ts was pmo way too close to the data point
                       content={(props) => (
                         <ChartTooltip
                           {...props}
@@ -4149,6 +4150,7 @@ function App() {
                   tickFormatter={(value) => formatCompact(Number(value))}
                 />
                 <Tooltip
+                  offset={50}
                   content={(props) => (
                     <ChartTooltip
                       {...props}
