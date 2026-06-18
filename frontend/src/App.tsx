@@ -57,7 +57,7 @@ type AppView = 'dashboard' | 'overview' | 'compare' | 'tools' | 'changelog'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
-type Timeframe = '7d' | '14d' | '1m' | '2m' | '5m' | '1y' | 'all'
+type Timeframe = '7d' | '14d' | '1m' | '2m' | '3m' | '6m' | '9m' | '1y' | '18m' | '2y' | 'all'
 type ResourceQualitySelection = number | 'weighted'
 
 type IndexDefinition = {
@@ -438,7 +438,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Improved dashboard number precision and highlighted key values in signal text.',
       'Added smoother dashboard refresh progress feedback.',
       'Weighted dashboard event picks toward newer speed modifiers.',
-      'Expanded comparison chart timeframes with 14D, 1M, 2M, 5M, 1Y, and All views.',
+      'Expanded comparison chart timeframes with 14D, 1M, 2M, 3M, 6M, 9M, 1Y, 18M, 2Y, and All views.',
       'Added government orders as dashboard demand catalysts.',
       'Added government order chart overlays and tooltip context.',
       'Added chart brush controls and optional resource volume bars in comparisons.',
@@ -871,19 +871,29 @@ function timeframeDays(timeframe: Timeframe) {
   if (timeframe === '14d') return 14
   if (timeframe === '1m') return 30
   if (timeframe === '2m') return 60
-  if (timeframe === '5m') return 150
+  if (timeframe === '3m') return 90
+  if (timeframe === '6m') return 180
+  if (timeframe === '9m') return 270
   if (timeframe === '1y') return 365
+  if (timeframe === '18m') return 548
+  if (timeframe === '2y') return 730
   return null
 }
 
 function normalizeTimeframe(timeframe: unknown): Timeframe {
-  if (timeframe === '30d' || timeframe === '90d') return '1m'
+  if (timeframe === '30d') return '1m'
+  if (timeframe === '90d') return '3m'
+  if (timeframe === '5m') return '6m'
   return timeframe === '7d' ||
     timeframe === '14d' ||
     timeframe === '1m' ||
     timeframe === '2m' ||
-    timeframe === '5m' ||
+    timeframe === '3m' ||
+    timeframe === '6m' ||
+    timeframe === '9m' ||
     timeframe === '1y' ||
+    timeframe === '18m' ||
+    timeframe === '2y' ||
     timeframe === 'all'
     ? timeframe
     : '1m'
@@ -918,6 +928,7 @@ async function loadIndexSeries(realm: RealmId, indexCode: IndexCode) {
     .eq('realm_id', realm)
     .eq('index_code', indexCode)
     .order('date', { ascending: true })
+    .range(0, 4999)
 
   if (error || !data?.length) {
     return null
@@ -1577,6 +1588,7 @@ async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSel
   }
 
   const { data, error } = await query
+    .range(0, 4999)
 
   if (error || !data?.length) {
     return []
@@ -4022,8 +4034,12 @@ function App() {
                 <option value="14d">14D</option>
                 <option value="1m">1M</option>
                 <option value="2m">2M</option>
-                <option value="5m">5M</option>
+                <option value="3m">3M</option>
+                <option value="6m">6M</option>
+                <option value="9m">9M</option>
                 <option value="1y">1Y</option>
+                <option value="18m">18M</option>
+                <option value="2y">2Y</option>
                 <option value="all">All</option>
               </select>
             </label>
