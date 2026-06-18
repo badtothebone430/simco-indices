@@ -2270,57 +2270,94 @@ function closestChartDatum<T extends { date: string }>(rows: T[], date: string) 
   }, rows[0])
 }
 
-function chartValuePosition(
+function chartValuePositionsInWindow(
   rows: Array<{ date: string } & Record<string, string | number | undefined>>,
   valueKeys: string[],
-  date: string,
+  startDate: string,
+  endDate?: string | null,
 ) {
   const values = rows.flatMap((row) =>
     valueKeys
       .map((key) => row[key])
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
   )
-  const datum = closestChartDatum(rows, date)
-  const localValues = datum
-    ? valueKeys
-        .map((key) => datum[key])
-        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    : []
-
-  if (!values.length || !localValues.length) {
-    return 0.5
+  if (!values.length) {
+    return [0.5]
   }
 
   const min = Math.min(...values)
   const max = Math.max(...values)
   const range = max - min
   if (range <= 0) {
-    return 0.5
+    return [0.5]
   }
 
-  const localAverage = localValues.reduce((sum, value) => sum + value, 0) / localValues.length
-  return (localAverage - min) / range
+  const windowEnd = endDate ?? startDate
+  const windowRows = rows.filter((row) => row.date >= startDate && row.date <= windowEnd)
+  const activeRows = windowRows.length ? windowRows : [closestChartDatum(rows, startDate)].filter(Boolean)
+
+  return activeRows.flatMap((row) =>
+    valueKeys
+      .map((key) => row?.[key])
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .map((value) => 1 - (value - min) / range),
+  )
 }
 
-function orderLabelPlacement(
+function orderLabelSlot(
   rows: Array<{ date: string } & Record<string, string | number | undefined>>,
   valueKeys: string[],
   orderDate: string,
+  dueDate: string | null | undefined,
   row: number,
 ) {
-  const position = chartValuePosition(rows, valueKeys, orderDate)
+  const candidates = [0.08, 0.145, 0.21, 0.285, 0.36, 0.44, 0.56, 0.64, 0.715, 0.79, 0.855, 0.92]
+  const orderIndex = rows.findIndex((chartRow) => chartRow.date >= orderDate)
+  const dueIndex = dueDate ? rows.findIndex((chartRow) => chartRow.date >= dueDate) : -1
+  const labelStartIndex = Math.max(0, (orderIndex >= 0 ? orderIndex : rows.length - 1) - Math.ceil(rows.length * 0.18))
+  const labelEndIndex = dueIndex >= 0 ? dueIndex : rows.length - 1
+  const labelRows = rows.slice(labelStartIndex, Math.max(labelStartIndex + 1, labelEndIndex + 1))
+  const priceYRatios = chartValuePositionsInWindow(
+    labelRows.length ? labelRows : rows,
+    valueKeys,
+    labelRows.at(0)?.date ?? orderDate,
+    labelRows.at(-1)?.date ?? dueDate,
+  )
+  const rankedSlots = candidates
+    .map((slot) => {
+      const priceClearance = Math.min(...priceYRatios.map((priceYRatio) => Math.abs(slot - priceYRatio)))
+      return {
+        slot,
+        score: priceClearance,
+      }
+    })
+    .sort((a, b) => b.score - a.score)
 
-  if (position < 0.45) {
-    return {
-      dy: topOverlayDy(row),
-      position: 'insideTopLeft' as const,
-    }
-  }
+  return rankedSlots[row % rankedSlots.length]?.slot ?? 0.82
+}
 
-  return {
-    dy: bottomOverlayDy(row),
-    position: 'insideBottomLeft' as const,
-  }
+function OrderReferenceLabel({
+  color,
+  label,
+  slot,
+  viewBox,
+}: {
+  color: string
+  label: string
+  slot: number
+  viewBox?: unknown
+}) {
+  const box =
+    viewBox && typeof viewBox === 'object'
+      ? viewBox as { x?: unknown; y?: unknown; height?: unknown }
+      : {}
+  const x = Number(box.x ?? 0) - 148
+  const y = Number(box.y ?? 0) + Number(box.height ?? 0) * slot
+  return (
+    <text fill={color} fontSize={11} textAnchor="start" x={x} y={y}>
+      {label}
+    </text>
+  )
 }
 
 function renderContextOverlays(
@@ -2434,10 +2471,11 @@ function renderContextOverlays(
           const color = orderLineColor(order)
           const label = orderChartLabel(order, multiRealm)
           const labelRow = (index + contests.length) % 4
-          const placement = orderLabelPlacement(
+          const slot = orderLabelSlot(
             chartRows,
             valueKeys,
             toDateOnly(order.created_at),
+            order.due_at ? toDateOnly(order.due_at) : null,
             labelRow,
           )
 
@@ -2447,12 +2485,14 @@ function renderContextOverlays(
               ifOverflow="visible"
               key={`${keyPrefix}-order-start-${order.realm_id}-${order.order_id}-${order.resource_id}-${order.quality}`}
               label={{
-                value: label,
-                fill: color,
-                fontSize: 11,
-                dx: -142,
-                dy: placement.dy,
-                position: placement.position,
+                content: (props) => (
+                  <OrderReferenceLabel
+                    color={color}
+                    label={label}
+                    slot={slot}
+                    viewBox={props.viewBox}
+                  />
+                ),
               }}
               stroke={color}
               strokeDasharray="2 5"
