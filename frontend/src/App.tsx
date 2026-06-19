@@ -14,6 +14,7 @@ import {
   Globe2,
   Hammer,
   Layers,
+  Link2,
   LineChart as LineChartIcon,
   Menu,
   Moon,
@@ -455,6 +456,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Added current basket View Composition shortcut from the Overview tab.',
       'Reduced stored composition history to 30 days to control database storage usage.',
       'Added component-only backfill workflow for rebuilding composition data without refetching market history.',
+      'Added quick share links that open directly into an exact comparison setup.',
       'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
       'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
     ],
@@ -778,6 +780,34 @@ function comparisonStateFromPreset(preset: ComparisonPreset): ComparisonState {
   }
 }
 
+function encodeComparisonShare(state: ComparisonState) {
+  const json = JSON.stringify(state)
+  const bytes = new TextEncoder().encode(json)
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+}
+
+function decodeComparisonShare(value: string): Partial<ComparisonState> | null {
+  try {
+    const padded = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
+    const binary = atob(padded)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Partial<ComparisonState>
+    return Array.isArray(parsed.selections) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function sharedComparisonStateFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  const shared = params.get('compare')
+  return shared ? decodeComparisonShare(shared) : null
+}
+
 const demoSeries: IndexPoint[] = Array.from({ length: 30 }, (_, index) => {
   const date = new Date(Date.UTC(2026, 4, 17 + index))
   const wave = Math.sin(index / 3.4) * 18
@@ -930,10 +960,6 @@ function isCollectionWindow(now = new Date()) {
   const previous = new Date(next)
   previous.setUTCDate(previous.getUTCDate() - 1)
   return next.getTime() - now.getTime() <= fiveMinutes || now.getTime() - previous.getTime() <= fiveMinutes
-}
-
-function delayedMarketUpdateTarget(now = new Date()) {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 55, 0)
 }
 
 function formatCountdown(target: Date, now = new Date()) {
@@ -3240,15 +3266,19 @@ function GuidedTour({
 }
 
 function App() {
+  const sharedComparisonState = useMemo(() => sharedComparisonStateFromUrl(), [])
   const storedComparisonState = useMemo(
-    () => readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
-    [],
+    () => ({
+      ...readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
+      ...(sharedComparisonState ?? {}),
+    }),
+    [sharedComparisonState],
   )
   const storedChartFilters = useMemo(
     () => readJsonStorage<Partial<ChartFilters>>(chartFiltersKey, {}),
     [],
   )
-  const [activeView, setActiveView] = useState<AppView>('dashboard')
+  const [activeView, setActiveView] = useState<AppView>(sharedComparisonState ? 'compare' : 'dashboard')
   const [realm, setRealm] = useState<RealmId>(0)
   const [selectedIndex, setSelectedIndex] = useState<IndexCode>('total_market')
   const [q0IncludesResearch, setQ0IncludesResearch] = useState(false)
@@ -3298,6 +3328,7 @@ function App() {
   const [compositionRows, setCompositionRows] = useState<CompositionComponentRow[]>([])
   const [isCompositionLoading, setIsCompositionLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
+  const [shareStatus, setShareStatus] = useState('')
   const [comparisonPresets, setComparisonPresets] = useState<ComparisonPreset[]>(() =>
     readJsonStorage<ComparisonPreset[]>(comparisonPresetsKey, []),
   )
@@ -3327,13 +3358,9 @@ function App() {
   const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
   const [showCollectionNotice, setShowCollectionNotice] = useState(() => isCollectionWindow())
-  const [delayedUpdateCountdown, setDelayedUpdateCountdown] = useState(() =>
-    formatCountdown(delayedMarketUpdateTarget()),
+  const [showTour, setShowTour] = useState(
+    () => !sharedComparisonState && localStorage.getItem(tourDismissedKey) !== 'true',
   )
-  const [showDelayedUpdateBanner, setShowDelayedUpdateBanner] = useState(
-    () => delayedMarketUpdateTarget().getTime() > Date.now(),
-  )
-  const [showTour, setShowTour] = useState(() => localStorage.getItem(tourDismissedKey) !== 'true')
   const [tourStepIndex, setTourStepIndex] = useState(0)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
   const [dataRefreshToken, setDataRefreshToken] = useState(0)
@@ -3457,12 +3484,9 @@ function App() {
     function refreshCountdown() {
       const now = new Date()
       const next = nextUpdateDate()
-      const delayedTarget = delayedMarketUpdateTarget(now)
       setNextUpdate(next)
       setUpdateCountdown(formatCountdown(next, now))
       setShowCollectionNotice(isCollectionWindow(now))
-      setDelayedUpdateCountdown(formatCountdown(delayedTarget, now))
-      setShowDelayedUpdateBanner(delayedTarget.getTime() > now.getTime())
     }
 
     refreshCountdown()
@@ -3882,6 +3906,24 @@ function App() {
     setPresetName('')
   }
 
+  async function shareComparisonLink() {
+    if (comparisonSelections.length === 0) return
+
+    const url = new URL(window.location.href)
+    url.searchParams.set('compare', encodeComparisonShare(currentComparisonState()))
+    url.hash = ''
+
+    try {
+      await navigator.clipboard.writeText(url.toString())
+      setShareStatus('Link copied')
+    } catch {
+      window.prompt('Copy comparison link', url.toString())
+      setShareStatus('Link ready')
+    }
+
+    window.setTimeout(() => setShareStatus(''), 2400)
+  }
+
   function deleteComparisonPreset(id: string) {
     setComparisonPresets((current) => current.filter((preset) => preset.id !== id))
   }
@@ -4061,15 +4103,6 @@ function App() {
 
   return (
     <main className="app-shell">
-      {showDelayedUpdateBanner && (
-        <div className="delayed-update-banner" role="status">
-          <strong>Market update is taking longer than usual today.</strong>
-          <span>
-            Expected ready in <b>{delayedUpdateCountdown}</b>
-          </span>
-        </div>
-      )}
-
       <header className="topbar">
         <div>
           <p className="eyebrow">Realm-level resource market performance</p>
@@ -4757,6 +4790,16 @@ function App() {
               <Save size={16} />
               Save Preset
             </button>
+            <button
+              className="secondary-command"
+              disabled={comparisonSelections.length === 0}
+              onClick={shareComparisonLink}
+              type="button"
+            >
+              <Link2 size={16} />
+              Share Link
+            </button>
+            {shareStatus && <span className="share-status">{shareStatus}</span>}
             {comparisonPresets.length > 0 && (
               <div className="preset-list" aria-label="Saved comparison presets">
                 {comparisonPresets.map((preset) => (
@@ -5201,7 +5244,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.2.1</strong>
+              <strong>v1.2.2</strong>
             </div>
           </div>
 
