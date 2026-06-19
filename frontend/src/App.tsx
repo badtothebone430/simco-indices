@@ -4966,6 +4966,7 @@ function App() {
                 <option value="7d">7D</option>
                 <option value="14d">14D</option>
                 <option value="30d">30D</option>
+                <option value="45d">45D</option>
                 <option value="60d">60D</option>
                 <option value="90d">90D</option>
                 <option value="all">All</option>
