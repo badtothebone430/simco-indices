@@ -465,6 +465,13 @@ const tourSteps: TourStep[] = [
 
 const changelogEntries: ChangelogEntry[] = [
   {
+    date: '2026-06-19',
+    title: 'Composition table analytics',
+    items: [
+      'Added sortable composition tables with daily and timeframe VWAP change columns.',
+    ],
+  },
+  {
     date: '2026-06-18',
     title: 'Composition, storage, and chart polish',
     items: [
@@ -476,7 +483,6 @@ const changelogEntries: ChangelogEntry[] = [
       'Added quick share links that open directly into an exact comparison setup.',
       'Extended comparison share links to preserve overlay filters and chart style.',
       'Reduced shared comparison URL length with compact state encoding.',
-      'Added sortable composition tables with daily and timeframe VWAP change columns.',
       'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
       'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
     ],
