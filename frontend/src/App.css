@@ -1739,6 +1739,34 @@ th {
   background: var(--table-head);
 }
 
+.table-sort-button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-weight: inherit;
+  white-space: nowrap;
+}
+
+th:first-child .table-sort-button {
+  justify-content: flex-start;
+}
+
+.table-sort-button:hover,
+.table-sort-button.active {
+  color: var(--accent-strong);
+}
+
+.composition-table table {
+  min-width: 1180px;
+}
+
 td {
   color: var(--text);
 }

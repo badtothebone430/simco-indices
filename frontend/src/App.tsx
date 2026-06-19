@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   ArrowDownRight,
+  ArrowUpDown,
   ArrowUpRight,
   BarChart3,
   CalendarClock,
@@ -95,6 +96,17 @@ type CompositionComponentRow = ComponentRow & {
 
 type CompositionGrouping = 'resource' | 'resource_quality'
 type CompositionTopCount = 10 | 20
+type CompositionTableSort =
+  | 'name'
+  | 'currentWeight'
+  | 'weightChange'
+  | 'vwapDayChange'
+  | 'vwapPeriodChange'
+  | 'firstSeen'
+  | 'vwap'
+  | 'volume'
+  | 'marketValue'
+type SortDirection = 'asc' | 'desc'
 
 type CompositionDatum = {
   date: string
@@ -464,6 +476,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Added quick share links that open directly into an exact comparison setup.',
       'Extended comparison share links to preserve overlay filters and chart style.',
       'Reduced shared comparison URL length with compact state encoding.',
+      'Added sortable composition tables with daily and timeframe VWAP change columns.',
       'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
       'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
     ],
@@ -2017,18 +2030,32 @@ function buildCompositionView(
   const latestRows = latestDate ? dateMap.get(latestDate) : undefined
   const allKeys = Array.from(totals.keys())
   const dateEntries = Array.from(dateMap.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  const previousRows = dateEntries.at(-2)?.[1]
+  const groupedVwap = (value: { weight: number; vwapWeightedValue: number }) =>
+    value.weight > 0 ? value.vwapWeightedValue / value.weight : 0
+  const vwapChange = (current: number, previous?: number) =>
+    previous && previous > 0 ? current / previous - 1 : null
   const currentTableRows = Array.from(latestRows?.entries() ?? [])
-    .map(([name, value]) => ({
-      name,
-      currentWeight: value.weight,
-      change: value.weight - (firstRows?.get(name)?.weight ?? 0),
-      firstSeen: dateEntries.find(([, dateRows]) => dateRows.has(name))?.[0] ?? latestDate ?? '',
-      lastSeen: latestDate ?? '',
-      vwap: value.weight > 0 ? value.vwapWeightedValue / value.weight : 0,
-      volume: value.volume,
-      market_value: value.market_value,
-      qualities: Array.from(value.qualities).sort((a, b) => a - b),
-    }))
+    .map(([name, value]) => {
+      const firstEntry = dateEntries.find(([, dateRows]) => dateRows.has(name))
+      const currentVwap = groupedVwap(value)
+      const previousVwap = previousRows?.get(name)
+      const periodVwap = firstEntry?.[1].get(name)
+
+      return {
+        name,
+        currentWeight: value.weight,
+        change: value.weight - (firstRows?.get(name)?.weight ?? 0),
+        vwapDayChange: vwapChange(currentVwap, previousVwap ? groupedVwap(previousVwap) : undefined),
+        vwapPeriodChange: vwapChange(currentVwap, periodVwap ? groupedVwap(periodVwap) : undefined),
+        firstSeen: firstEntry?.[0] ?? latestDate ?? '',
+        lastSeen: latestDate ?? '',
+        vwap: currentVwap,
+        volume: value.volume,
+        market_value: value.market_value,
+        qualities: Array.from(value.qualities).sort((a, b) => a - b),
+      }
+    })
     .sort((a, b) => b.currentWeight - a.currentWeight)
 
   const keyChanges = allKeys.map((name) => ({
@@ -3458,6 +3485,8 @@ function App() {
   const [compositionGrouping, setCompositionGrouping] = useState<CompositionGrouping>('resource_quality')
   const [compositionTopCount, setCompositionTopCount] = useState<CompositionTopCount>(10)
   const [compositionShowOther, setCompositionShowOther] = useState(true)
+  const [compositionTableSort, setCompositionTableSort] = useState<CompositionTableSort>('currentWeight')
+  const [compositionTableSortDirection, setCompositionTableSortDirection] = useState<SortDirection>('desc')
   const [compositionRows, setCompositionRows] = useState<CompositionComponentRow[]>([])
   const [isCompositionLoading, setIsCompositionLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
@@ -3608,6 +3637,42 @@ function App() {
     () => buildCompositionView(compositionRows, compositionGrouping, compositionTopCount),
     [compositionRows, compositionGrouping, compositionTopCount],
   )
+  const sortedCompositionTableRows = useMemo(() => {
+    const valueFor = (row: (typeof compositionView.tableRows)[number]) => {
+      switch (compositionTableSort) {
+        case 'name':
+          return row.name
+        case 'currentWeight':
+          return row.currentWeight
+        case 'weightChange':
+          return row.change
+        case 'vwapDayChange':
+          return row.vwapDayChange
+        case 'vwapPeriodChange':
+          return row.vwapPeriodChange
+        case 'firstSeen':
+          return row.firstSeen
+        case 'vwap':
+          return row.vwap
+        case 'volume':
+          return row.volume
+        case 'marketValue':
+          return row.market_value
+      }
+    }
+
+    return [...compositionView.tableRows].sort((left, right) => {
+      const leftValue = valueFor(left)
+      const rightValue = valueFor(right)
+      if (leftValue === null || leftValue === undefined) return 1
+      if (rightValue === null || rightValue === undefined) return -1
+      const comparison =
+        typeof leftValue === 'string' && typeof rightValue === 'string'
+          ? leftValue.localeCompare(rightValue)
+          : Number(leftValue) - Number(rightValue)
+      return compositionTableSortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [compositionTableSort, compositionTableSortDirection, compositionView.tableRows])
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('simco-theme', theme)
@@ -4181,6 +4246,16 @@ function App() {
     setActiveView('composition')
   }
 
+  function toggleCompositionTableSort(sort: CompositionTableSort) {
+    if (compositionTableSort === sort) {
+      setCompositionTableSortDirection((direction) => (direction === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+
+    setCompositionTableSort(sort)
+    setCompositionTableSortDirection(sort === 'name' || sort === 'firstSeen' ? 'asc' : 'desc')
+  }
+
   function selectView(view: AppView) {
     setActiveView(view)
     setIsMobileNavOpen(false)
@@ -4189,6 +4264,22 @@ function App() {
   function refreshMarketData() {
     clearDataCache()
     setDataRefreshToken((current) => current + 1)
+  }
+
+  function compositionSortHeader(label: string, sort: CompositionTableSort) {
+    const active = compositionTableSort === sort
+    return (
+      <th aria-sort={active ? (compositionTableSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}>
+        <button
+          className={`table-sort-button${active ? ' active' : ''}`}
+          onClick={() => toggleCompositionTableSort(sort)}
+          type="button"
+        >
+          {label}
+          <ArrowUpDown size={13} />
+        </button>
+      </th>
+    )
   }
 
   const isAnyMarketDataLoading = isLoading || isDashboardLoading || isComparisonLoading || isCompositionLoading
@@ -5325,23 +5416,31 @@ function App() {
               <table>
                 <thead>
                   <tr>
-                    <th>Component</th>
-                    <th>Current Weight</th>
-                    <th>Change</th>
-                    <th>First Seen</th>
-                    <th>VWAP</th>
-                    <th>Volume</th>
-                    <th>Market Value</th>
+                    {compositionSortHeader('Component', 'name')}
+                    {compositionSortHeader('Current Weight', 'currentWeight')}
+                    {compositionSortHeader('Weight Change', 'weightChange')}
+                    {compositionSortHeader('VWAP 1D', 'vwapDayChange')}
+                    {compositionSortHeader(`VWAP ${compositionTimeframe.toUpperCase()}`, 'vwapPeriodChange')}
+                    {compositionSortHeader('First Seen', 'firstSeen')}
+                    {compositionSortHeader('VWAP', 'vwap')}
+                    {compositionSortHeader('Volume', 'volume')}
+                    {compositionSortHeader('Market Value', 'marketValue')}
                   </tr>
                 </thead>
                 <tbody>
-                  {compositionView.tableRows.map((row) => (
+                  {sortedCompositionTableRows.map((row) => (
                     <tr key={row.name}>
                       <td>
                         <strong>{row.name}</strong>
                       </td>
                       <td>{formatPercent(row.currentWeight)}</td>
                       <td className={row.change >= 0 ? 'positive' : 'negative'}>{formatPercent(row.change)}</td>
+                      <td className={row.vwapDayChange === null ? '' : row.vwapDayChange >= 0 ? 'positive' : 'negative'}>
+                        {row.vwapDayChange === null ? '-' : formatPercent(row.vwapDayChange)}
+                      </td>
+                      <td className={row.vwapPeriodChange === null ? '' : row.vwapPeriodChange >= 0 ? 'positive' : 'negative'}>
+                        {row.vwapPeriodChange === null ? '-' : formatPercent(row.vwapPeriodChange)}
+                      </td>
                       <td>{formatDisplayDate(row.firstSeen)}</td>
                       <td>{formatNumber(row.vwap)}</td>
                       <td>{formatCompact(row.volume)}</td>
@@ -5396,7 +5495,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.2.4</strong>
+              <strong>v1.2.5</strong>
             </div>
           </div>
 
