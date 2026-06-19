@@ -305,6 +305,11 @@ type ChartFilters = {
   chartCurve: ChartCurve
 }
 
+type ComparisonSharePayload = {
+  comparison: Partial<ComparisonState>
+  filters?: Partial<ChartFilters>
+}
+
 type TourStep = {
   selector: string
   spotlightSelector?: string
@@ -457,6 +462,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Reduced stored composition history to 30 days to control database storage usage.',
       'Added component-only backfill workflow for rebuilding composition data without refetching market history.',
       'Added quick share links that open directly into an exact comparison setup.',
+      'Extended comparison share links to preserve overlay filters and chart style.',
       'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
       'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
     ],
@@ -780,8 +786,8 @@ function comparisonStateFromPreset(preset: ComparisonPreset): ComparisonState {
   }
 }
 
-function encodeComparisonShare(state: ComparisonState) {
-  const json = JSON.stringify(state)
+function encodeComparisonShare(payload: ComparisonSharePayload) {
+  const json = JSON.stringify(payload)
   const bytes = new TextEncoder().encode(json)
   let binary = ''
   bytes.forEach((byte) => {
@@ -790,19 +796,24 @@ function encodeComparisonShare(state: ComparisonState) {
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 }
 
-function decodeComparisonShare(value: string): Partial<ComparisonState> | null {
+function decodeComparisonShare(value: string): ComparisonSharePayload | null {
   try {
     const padded = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
     const binary = atob(padded)
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Partial<ComparisonState>
-    return Array.isArray(parsed.selections) ? parsed : null
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown
+    if (parsed && typeof parsed === 'object' && 'comparison' in parsed) {
+      const payload = parsed as ComparisonSharePayload
+      return Array.isArray(payload.comparison?.selections) ? payload : null
+    }
+    const legacyState = parsed as Partial<ComparisonState>
+    return Array.isArray(legacyState.selections) ? { comparison: legacyState } : null
   } catch {
     return null
   }
 }
 
-function sharedComparisonStateFromUrl() {
+function sharedComparisonFromUrl() {
   const params = new URLSearchParams(window.location.search)
   const shared = params.get('compare')
   return shared ? decodeComparisonShare(shared) : null
@@ -3266,19 +3277,22 @@ function GuidedTour({
 }
 
 function App() {
-  const sharedComparisonState = useMemo(() => sharedComparisonStateFromUrl(), [])
+  const sharedComparison = useMemo(() => sharedComparisonFromUrl(), [])
   const storedComparisonState = useMemo(
     () => ({
       ...readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
-      ...(sharedComparisonState ?? {}),
+      ...(sharedComparison?.comparison ?? {}),
     }),
-    [sharedComparisonState],
+    [sharedComparison],
   )
   const storedChartFilters = useMemo(
-    () => readJsonStorage<Partial<ChartFilters>>(chartFiltersKey, {}),
-    [],
+    () => ({
+      ...readJsonStorage<Partial<ChartFilters>>(chartFiltersKey, {}),
+      ...(sharedComparison?.filters ?? {}),
+    }),
+    [sharedComparison],
   )
-  const [activeView, setActiveView] = useState<AppView>(sharedComparisonState ? 'compare' : 'dashboard')
+  const [activeView, setActiveView] = useState<AppView>(sharedComparison ? 'compare' : 'dashboard')
   const [realm, setRealm] = useState<RealmId>(0)
   const [selectedIndex, setSelectedIndex] = useState<IndexCode>('total_market')
   const [q0IncludesResearch, setQ0IncludesResearch] = useState(false)
@@ -3359,7 +3373,7 @@ function App() {
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
   const [showCollectionNotice, setShowCollectionNotice] = useState(() => isCollectionWindow())
   const [showTour, setShowTour] = useState(
-    () => !sharedComparisonState && localStorage.getItem(tourDismissedKey) !== 'true',
+    () => !sharedComparison && localStorage.getItem(tourDismissedKey) !== 'true',
   )
   const [tourStepIndex, setTourStepIndex] = useState(0)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
@@ -3881,6 +3895,19 @@ function App() {
     }
   }
 
+  function currentChartFilters(): ChartFilters {
+    return {
+      showPhases,
+      showEvents,
+      showContests,
+      showOrders,
+      showUpdates,
+      showTechnicals,
+      showVolume,
+      chartCurve,
+    }
+  }
+
   function applyComparisonState(state: ComparisonState) {
     setComparisonKind(state.kind)
     setSelectedComparisonRealm(state.selectedRealm ?? realm)
@@ -3910,7 +3937,13 @@ function App() {
     if (comparisonSelections.length === 0) return
 
     const url = new URL(window.location.href)
-    url.searchParams.set('compare', encodeComparisonShare(currentComparisonState()))
+    url.searchParams.set(
+      'compare',
+      encodeComparisonShare({
+        comparison: currentComparisonState(),
+        filters: currentChartFilters(),
+      }),
+    )
     url.hash = ''
 
     try {
@@ -5244,7 +5277,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.2.2</strong>
+              <strong>v1.2.3</strong>
             </div>
           </div>
 
