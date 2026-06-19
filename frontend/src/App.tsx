@@ -463,6 +463,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Added component-only backfill workflow for rebuilding composition data without refetching market history.',
       'Added quick share links that open directly into an exact comparison setup.',
       'Extended comparison share links to preserve overlay filters and chart style.',
+      'Reduced shared comparison URL length with compact state encoding.',
       'Added fixed SimCompanies update markers, including Research Rework and Retail Modelling Rework.',
       'Improved chart overlay label placement so updates, events, contests, orders, and technical labels avoid each other.',
     ],
@@ -786,8 +787,8 @@ function comparisonStateFromPreset(preset: ComparisonPreset): ComparisonState {
   }
 }
 
-function encodeComparisonShare(payload: ComparisonSharePayload) {
-  const json = JSON.stringify(payload)
+function encodeBase64Url(value: unknown) {
+  const json = JSON.stringify(value)
   const bytes = new TextEncoder().encode(json)
   let binary = ''
   bytes.forEach((byte) => {
@@ -796,15 +797,133 @@ function encodeComparisonShare(payload: ComparisonSharePayload) {
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 }
 
+function decodeBase64Url(value: string): unknown {
+  const padded = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
+  const binary = atob(padded)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown
+}
+
+function chartFilterMask(filters: ChartFilters) {
+  return (
+    (filters.showPhases ? 1 : 0) |
+    (filters.showEvents ? 2 : 0) |
+    (filters.showContests ? 4 : 0) |
+    (filters.showOrders ? 8 : 0) |
+    (filters.showUpdates ? 16 : 0) |
+    (filters.showTechnicals ? 32 : 0) |
+    (filters.showVolume ? 64 : 0) |
+    (filters.chartCurve === 'accurate' ? 128 : 0)
+  )
+}
+
+function chartFiltersFromMask(mask: number): ChartFilters {
+  return {
+    showPhases: Boolean(mask & 1),
+    showEvents: Boolean(mask & 2),
+    showContests: Boolean(mask & 4),
+    showOrders: Boolean(mask & 8),
+    showUpdates: Boolean(mask & 16),
+    showTechnicals: Boolean(mask & 32),
+    showVolume: Boolean(mask & 64),
+    chartCurve: mask & 128 ? 'accurate' : 'smooth',
+  }
+}
+
+function compactShareState(payload: ComparisonSharePayload) {
+  const comparison = payload.comparison
+  const filters = payload.filters
+  return {
+    v: 1,
+    s: (comparison.selections ?? []).map((selection) =>
+      selection.kind === 'resource'
+        ? ['r', selection.realm, selection.resourceId, selection.quality === 'weighted' ? 'w' : selection.quality, selection.resourceName]
+        : ['i', selection.realm, selection.indexCode, selection.indexName],
+    ),
+    ...(comparison.mode === 'absolute' ? { m: 'a' } : {}),
+    ...(comparison.metric === 'market_value' ? { x: 'm' } : {}),
+    ...(comparison.timeframe !== '30d' ? { t: comparison.timeframe } : {}),
+    ...(comparison.height !== 460 ? { h: comparison.height } : {}),
+    f: chartFilterMask({
+      showPhases: Boolean(filters?.showPhases),
+      showEvents: Boolean(filters?.showEvents),
+      showContests: Boolean(filters?.showContests),
+      showOrders: Boolean(filters?.showOrders),
+      showUpdates: Boolean(filters?.showUpdates),
+      showTechnicals: Boolean(filters?.showTechnicals),
+      showVolume: Boolean(filters?.showVolume),
+      chartCurve: filters?.chartCurve === 'accurate' ? 'accurate' : 'smooth',
+    }),
+  }
+}
+
+function decodeCompactShareState(value: Record<string, unknown>): ComparisonSharePayload | null {
+  if (value.v !== 1 || !Array.isArray(value.s)) return null
+
+  const selections: ComparisonSelection[] = []
+  for (const item of value.s) {
+    if (!Array.isArray(item)) return null
+    if (item[0] === 'r' && typeof item[1] === 'number' && typeof item[2] === 'number' && typeof item[4] === 'string') {
+      const quality = item[3] === 'w' ? 'weighted' : item[3]
+      if (quality !== 'weighted' && (typeof quality !== 'number' || !Number.isInteger(quality))) return null
+      selections.push({
+        key: `r${item[1]}r${item[2]}q${quality}`,
+        kind: 'resource',
+        realm: item[1] as RealmId,
+        resourceId: item[2],
+        resourceName: item[4],
+        quality,
+      })
+      continue
+    }
+    if (item[0] === 'i' && typeof item[1] === 'number' && typeof item[2] === 'string' && typeof item[3] === 'string') {
+      selections.push({
+        key: `i${item[1]}-${item[2]}`,
+        kind: 'index',
+        realm: item[1] as RealmId,
+        indexCode: item[2],
+        indexName: item[3],
+      })
+      continue
+    }
+    return null
+  }
+
+  if (!selections.length) return null
+  const activeSelection = selections.at(-1)!
+  const selectedRealm = activeSelection.realm
+  const comparison: Partial<ComparisonState> = {
+    kind: activeSelection.kind,
+    selectedRealm,
+    selectedIndex: activeSelection.kind === 'index' ? activeSelection.indexCode : 'total_market',
+    selectedResourceId: activeSelection.kind === 'resource' ? activeSelection.resourceId.toString() : '',
+    selectedQuality: activeSelection.kind === 'resource' ? activeSelection.quality : 'weighted',
+    selections,
+    mode: value.m === 'a' ? 'absolute' : 'percent',
+    metric: value.x === 'm' ? 'market_value' : 'vwap',
+    timeframe: normalizeTimeframe(typeof value.t === 'string' ? value.t : '30d'),
+    height: typeof value.h === 'number' ? value.h : 460,
+  }
+  return {
+    comparison,
+    filters: typeof value.f === 'number' ? chartFiltersFromMask(value.f) : undefined,
+  }
+}
+
+function encodeComparisonShare(payload: ComparisonSharePayload) {
+  return encodeBase64Url(compactShareState(payload))
+}
+
 function decodeComparisonShare(value: string): ComparisonSharePayload | null {
   try {
-    const padded = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
-    const binary = atob(padded)
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown
+    const parsed = decodeBase64Url(value)
     if (parsed && typeof parsed === 'object' && 'comparison' in parsed) {
       const payload = parsed as ComparisonSharePayload
       return Array.isArray(payload.comparison?.selections) ? payload : null
+    }
+    if (parsed && typeof parsed === 'object') {
+      const compact = decodeCompactShareState(parsed as Record<string, unknown>)
+      if (compact) return compact
     }
     const legacyState = parsed as Partial<ComparisonState>
     return Array.isArray(legacyState.selections) ? { comparison: legacyState } : null
@@ -5277,7 +5396,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.2.3</strong>
+              <strong>v1.2.4</strong>
             </div>
           </div>
 
