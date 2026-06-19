@@ -7,6 +7,7 @@ const MAX_FETCH_ATTEMPTS = 5
 const BASE_INDEX_VALUE = 1000
 const DATA_RETENTION_DAYS = Number(process.env.DATA_RETENTION_DAYS ?? 90)
 const INDEX_COMPONENT_RETENTION_DAYS = Number(process.env.INDEX_COMPONENT_RETENTION_DAYS ?? 30)
+const PRUNE_CHUNK_DAYS = Number(process.env.PRUNE_CHUNK_DAYS ?? 7)
 const QUALITY_LEVELS = Array.from({ length: 13 }, (_, quality) => quality)
 const startedAt = Date.now()
 
@@ -510,6 +511,58 @@ function retentionCutoffDate(days = DATA_RETENTION_DAYS) {
   return cutoff.toISOString().slice(0, 10)
 }
 
+function addDays(dateText, days) {
+  const date = new Date(`${dateText}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+async function oldestDateBeforeCutoff(supabase, table, realm, cutoffDate) {
+  const { data, error } = await supabase
+    .from(table)
+    .select('date')
+    .eq('realm_id', realm)
+    .lt('date', cutoffDate)
+    .order('date', { ascending: true })
+    .limit(1)
+
+  if (error) {
+    throw new Error(`${table} oldest date lookup failed: ${error.message}`)
+  }
+
+  return data?.[0]?.date ?? null
+}
+
+async function pruneTableByDateChunks(supabase, table, cutoffDate) {
+  const safeChunkDays = Number.isFinite(PRUNE_CHUNK_DAYS) && PRUNE_CHUNK_DAYS > 0 ? PRUNE_CHUNK_DAYS : 7
+  let chunks = 0
+
+  for (const realm of REALMS) {
+    let startDate = await oldestDateBeforeCutoff(supabase, table, realm, cutoffDate)
+    while (startDate && startDate < cutoffDate) {
+      const endDate = addDays(startDate, safeChunkDays) < cutoffDate
+        ? addDays(startDate, safeChunkDays)
+        : cutoffDate
+
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .eq('realm_id', realm)
+        .gte('date', startDate)
+        .lt('date', endDate)
+
+      if (error) {
+        throw new Error(`${table} prune failed for realm ${realm}, ${startDate} to ${endDate}: ${error.message}`)
+      }
+
+      chunks += 1
+      startDate = endDate
+    }
+  }
+
+  return chunks
+}
+
 function buildMarketRows(realm, market) {
   const resource = market.resource
   const summaries = resource.summariesByQuality ?? []
@@ -677,16 +730,8 @@ async function pruneOldMarketData(supabase) {
   const results = []
 
   for (const [table, tableCutoffDate] of tables) {
-    const { error, count } = await supabase
-      .from(table)
-      .delete({ count: 'exact' })
-      .lt('date', tableCutoffDate)
-
-    if (error) {
-      throw new Error(`${table} prune failed: ${error.message}`)
-    }
-
-    results.push({ table, deletedRows: count ?? 0 })
+    const chunks = await pruneTableByDateChunks(supabase, table, tableCutoffDate)
+    results.push({ table, cutoffDate: tableCutoffDate, chunks })
   }
 
   console.log(`Pruned dated market data: ${JSON.stringify(results)}`)

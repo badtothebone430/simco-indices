@@ -58,7 +58,7 @@ type AppView = 'dashboard' | 'overview' | 'compare' | 'composition' | 'tools' | 
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
-type Timeframe = '7d' | '14d' | '30d' | '60d' | '90d' | 'all'
+type Timeframe = '7d' | '12d' | '14d' | '30d' | '60d' | '90d' | 'all'
 type ResourceQualitySelection = number | 'weighted'
 type ChartCurve = 'smooth' | 'accurate'
 
@@ -862,9 +862,15 @@ function getSupabase() {
 }
 
 function formatNumber(value: number) {
+  const absolute = Math.abs(value)
   return new Intl.NumberFormat('en-US', {
-    maximumFractionDigits: value >= 100 ? 0 : 2,
+    maximumFractionDigits: absolute >= 100 ? 0 : absolute < 10 ? 3 : 2,
+    minimumFractionDigits: absolute < 10 ? 3 : 0,
   }).format(value)
+}
+
+function formatChartValue(value: number, compact = false) {
+  return compact ? formatCompact(value) : formatNumber(value)
 }
 
 function formatPriceLevel(value: number) {
@@ -926,6 +932,10 @@ function isCollectionWindow(now = new Date()) {
   return next.getTime() - now.getTime() <= fiveMinutes || now.getTime() - previous.getTime() <= fiveMinutes
 }
 
+function delayedMarketUpdateTarget(now = new Date()) {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 55, 0)
+}
+
 function formatCountdown(target: Date, now = new Date()) {
   const totalSeconds = Math.max(0, Math.floor((target.getTime() - now.getTime()) / 1000))
   const hours = Math.floor(totalSeconds / 3600)
@@ -939,6 +949,7 @@ function formatCountdown(target: Date, now = new Date()) {
 
 function timeframeDays(timeframe: Timeframe) {
   if (timeframe === '7d') return 7
+  if (timeframe === '12d') return 12
   if (timeframe === '14d') return 14
   if (timeframe === '30d') return 30
   if (timeframe === '60d') return 60
@@ -961,6 +972,7 @@ function normalizeTimeframe(timeframe: unknown): Timeframe {
     return '90d'
   }
   return timeframe === '7d' ||
+    timeframe === '12d' ||
     timeframe === '14d' ||
     timeframe === '30d' ||
     timeframe === '60d' ||
@@ -1431,7 +1443,7 @@ async function loadResourceSignal(realm: RealmId): Promise<DashboardSignal | nul
   }
 }
 
-async function loadPagedMarketDailyRows(realm: RealmId, targetDateCount = 12) {
+async function loadPagedMarketDailyRows(realm: RealmId, targetDateCount = 30) {
   const supabase = getSupabase()
   if (!supabase) {
     return []
@@ -1684,7 +1696,7 @@ async function loadDashboard() {
   }
 }
 
-async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSelection) {
+async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSelection, timeframe: Timeframe) {
   if (selection.kind !== 'resource') {
     return []
   }
@@ -1694,25 +1706,53 @@ async function loadResourceMarketSeries(realm: RealmId, selection: ComparisonSel
     return []
   }
 
-  const query = supabase
-    .from('market_daily')
-    .select('date,vwap,market_value,volume')
-    .eq('realm_id', selection.realm ?? realm)
-    .eq('resource_id', selection.resourceId)
-    .order('date', { ascending: true })
+  const pageSize = 1000
+  let from = 0
+  const rows: MarketPoint[] = []
+  const startDate = (() => {
+    const days = timeframeDays(timeframe)
+    if (!days) return null
+    const date = new Date()
+    date.setUTCDate(date.getUTCDate() - days + 1)
+    return date.toISOString().slice(0, 10)
+  })()
 
-  if (selection.quality !== 'weighted') {
-    query.eq('quality', selection.quality)
+  while (true) {
+    let query = supabase
+      .from('market_daily')
+      .select('date,vwap,market_value,volume')
+      .eq('realm_id', selection.realm ?? realm)
+      .eq('resource_id', selection.resourceId)
+      .order('date', { ascending: true })
+      .range(from, from + pageSize - 1)
+
+    if (selection.quality !== 'weighted') {
+      query = query.eq('quality', selection.quality)
+    }
+
+    if (startDate) {
+      query = query.gte('date', startDate)
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      return []
+    }
+
+    rows.push(...((data ?? []) as MarketPoint[]))
+
+    if (!data || data.length < pageSize) {
+      break
+    }
+
+    from += pageSize
   }
 
-  const { data, error } = await query
-    .range(0, 4999)
-
-  if (error || !data?.length) {
+  if (!rows.length) {
     return []
   }
 
-  const rows = data as MarketPoint[]
   if (selection.quality !== 'weighted') {
     return rows
   }
@@ -2021,15 +2061,16 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
     return null
   }
 
-  const scale = Math.max(Math.abs(latest), range, 1)
+  const scale = Math.max(Math.abs(latest), range, 0.000001)
   const volatility = range / scale
-  if (volatility < 0.006) {
+  if (volatility < 0.004) {
     return null
   }
 
-  const zoneSize = Math.max(range * 0.14, scale * 0.012)
+  const zoneSize = Math.min(Math.max(range * 0.14, scale * 0.003, range * 0.06), range * 0.22)
   const demandZone: [number, number] = [min, min + zoneSize]
   const supplyZone: [number, number] = [max - zoneSize, max]
+  const zonesOverlap = demandZone[1] >= supplyZone[0] - range * 0.04
   const channelRows = channelWindow(rows)
   const channelValues = channelRows.map((row) => row.value)
   const channelStartIndex = rows.length - channelRows.length
@@ -2096,7 +2137,7 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
       tone: 'positive',
       strength: 1 + demandProximity + channelStrength * 0.35,
       demandZone,
-      supplyZone: hasSupplyZone ? supplyZone : undefined,
+      supplyZone: hasSupplyZone && !zonesOverlap ? supplyZone : undefined,
       channel: channelKind ? channel : undefined,
     }
   }
@@ -2112,7 +2153,7 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
       detail: supplyDetail,
       tone: 'negative',
       strength: 1 + supplyProximity + channelStrength * 0.35,
-      demandZone: hasDemandZone ? demandZone : undefined,
+      demandZone: hasDemandZone && !zonesOverlap ? demandZone : undefined,
       supplyZone,
       channel: channelKind ? channel : undefined,
     }
@@ -2128,8 +2169,8 @@ function analyzeTechnicals(inputRows: TechnicalPoint[]): TechnicalSignal | null 
           : 'Price is moving inside a falling channel, with lower support and resistance levels.',
       tone: channelKind === 'ascending-channel' ? 'positive' : 'negative',
       strength: 0.8 + channelStrength,
-      demandZone: hasDemandZone ? demandZone : undefined,
-      supplyZone: hasSupplyZone ? supplyZone : undefined,
+      demandZone: hasDemandZone && !zonesOverlap ? demandZone : undefined,
+      supplyZone: hasSupplyZone && !zonesOverlap ? supplyZone : undefined,
       channel,
     }
   }
@@ -2798,12 +2839,14 @@ function ChartTooltip({
   label,
   context,
   valueLabel,
+  valueFormatter,
 }: {
   active?: boolean
   payload?: ReadonlyArray<any>
   label?: string | number
   context: ChartContext
   valueLabel: string
+  valueFormatter?: (value: number, name: string) => string
 }) {
   if (!active || !payload?.length || !label) {
     return null
@@ -2837,7 +2880,9 @@ function ChartTooltip({
         <span key={`${item.name}-${item.value}`}>
           <i style={{ background: item.color }} />
           {String(item.name ?? valueLabel)}:{' '}
-          {String(item.name ?? '').toLowerCase().includes('volume')
+          {valueFormatter
+            ? valueFormatter(Number(item.value), String(item.name ?? valueLabel))
+            : String(item.name ?? '').toLowerCase().includes('volume')
             ? formatCompact(Number(item.value))
             : formatNumber(Number(item.value))}
         </span>
@@ -3282,6 +3327,12 @@ function App() {
   const [nextUpdate, setNextUpdate] = useState(() => nextUpdateDate())
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
   const [showCollectionNotice, setShowCollectionNotice] = useState(() => isCollectionWindow())
+  const [delayedUpdateCountdown, setDelayedUpdateCountdown] = useState(() =>
+    formatCountdown(delayedMarketUpdateTarget()),
+  )
+  const [showDelayedUpdateBanner, setShowDelayedUpdateBanner] = useState(
+    () => delayedMarketUpdateTarget().getTime() > Date.now(),
+  )
   const [showTour, setShowTour] = useState(() => localStorage.getItem(tourDismissedKey) !== 'true')
   const [tourStepIndex, setTourStepIndex] = useState(0)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
@@ -3404,10 +3455,14 @@ function App() {
 
   useEffect(() => {
     function refreshCountdown() {
+      const now = new Date()
       const next = nextUpdateDate()
+      const delayedTarget = delayedMarketUpdateTarget(now)
       setNextUpdate(next)
-      setUpdateCountdown(formatCountdown(next))
-      setShowCollectionNotice(isCollectionWindow())
+      setUpdateCountdown(formatCountdown(next, now))
+      setShowCollectionNotice(isCollectionWindow(now))
+      setDelayedUpdateCountdown(formatCountdown(delayedTarget, now))
+      setShowDelayedUpdateBanner(delayedTarget.getTime() > now.getTime())
     }
 
     refreshCountdown()
@@ -3674,7 +3729,7 @@ function App() {
           selection.key,
           selection.kind === 'index'
             ? await loadIndexComparisonSeries(realm, selection)
-            : (await loadResourceMarketSeries(realm, selection)).map((row) => ({
+            : (await loadResourceMarketSeries(realm, selection, compareTimeframe)).map((row) => ({
                 date: row.date,
                 value: compareMetric === 'market_value' ? row.market_value : row.vwap,
                 volume: row.volume,
@@ -4006,6 +4061,15 @@ function App() {
 
   return (
     <main className="app-shell">
+      {showDelayedUpdateBanner && (
+        <div className="delayed-update-banner" role="status">
+          <strong>Market update is taking longer than usual today.</strong>
+          <span>
+            Expected ready in <b>{delayedUpdateCountdown}</b>
+          </span>
+        </div>
+      )}
+
       <header className="topbar">
         <div>
           <p className="eyebrow">Realm-level resource market performance</p>
@@ -4234,6 +4298,7 @@ function App() {
                 <p className="eyebrow">Technical Analysis</p>
                 <h2>Levels and channels</h2>
               </div>
+              <span className="technical-window-badge">30D setup</span>
             </div>
             <div className="technical-grid">
               {(dashboardTechnicals.length ? dashboardTechnicals : [
@@ -4261,7 +4326,11 @@ function App() {
                     <button
                       className="go-to-button"
                       disabled={!item.target}
-                      onClick={() => item.target && goToDashboardTarget(item.target)}
+                      onClick={() => {
+                        if (!item.target) return
+                        setCompareTimeframe('30d')
+                        goToDashboardTarget(item.target)
+                      }}
                       type="button"
                     >
                       <ArrowUpRight size={15} />
@@ -4630,6 +4699,7 @@ function App() {
                 onChange={(event) => setCompareTimeframe(event.target.value as Timeframe)}
               >
                 <option value="7d">7D</option>
+                <option value="12d">12D</option>
                 <option value="14d">14D</option>
                 <option value="30d">30D</option>
                 <option value="60d">60D</option>
@@ -4726,7 +4796,13 @@ function App() {
                   yAxisId="value"
                   domain={activeComparisonDomain}
                   tickFormatter={(value) =>
-                    compareMode === 'percent' ? `${Number(value).toFixed(0)}%` : formatCompact(Number(value))
+                    compareMode === 'percent'
+                      ? `${Number(value).toFixed(0)}%`
+                      : formatChartValue(
+                          Number(value),
+                          compareMetric === 'market_value' &&
+                            comparisonSelections.some((selection) => selection.kind === 'resource'),
+                        )
                   }
                   tickLine={false}
                   axisLine={false}
@@ -4745,6 +4821,15 @@ function App() {
                       {...props}
                       context={filteredComparisonContext}
                       valueLabel={compareMode === 'percent' ? 'Change' : 'Value'}
+                      valueFormatter={(value, name) => {
+                        if (name.toLowerCase().includes('volume')) return formatCompact(value)
+                        if (compareMode === 'percent') return `${value.toFixed(2)}%`
+                        return formatChartValue(
+                          value,
+                          compareMetric === 'market_value' &&
+                            comparisonSelections.some((selection) => selection.kind === 'resource'),
+                        )
+                      }}
                     />
                   )}
                 />
