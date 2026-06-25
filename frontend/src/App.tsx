@@ -465,6 +465,14 @@ const tourSteps: TourStep[] = [
 
 const changelogEntries: ChangelogEntry[] = [
   {
+    date: '2026-06-25',
+    title: 'Comparison stability fix',
+    items: [
+      'Fixed a blank-screen crash when saved comparison state could not be written to browser storage.',
+      'Reduced repeated Supabase client creation during data loading.',
+    ],
+  },
+  {
     date: '2026-06-19',
     title: 'Composition table analytics',
     items: [
