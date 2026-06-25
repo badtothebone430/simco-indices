@@ -736,6 +736,15 @@ function readJsonStorage<T>(key: string, fallback: T): T {
   }
 }
 
+function writeJsonStorage(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+    return true
+  } catch {
+    return false
+  }
+}
+
 type CachedValue<T> = {
   cycleKey: string
   savedAt: string
@@ -781,7 +790,7 @@ function writeDataCache<T>(key: string, value: T) {
     }
     localStorage.setItem(dataCacheKey(key), JSON.stringify(cached))
   } catch {
-    // Cache writes can fail in private browsing or when storage is full.
+    clearDataCache()
   }
 }
 
@@ -1029,6 +1038,9 @@ const demoComparisonData: ComparisonDatum[] = demoSeries.map((point, index) => (
   steel: 18.5 + index * 0.12 + Math.cos(index / 3.2) * 0.9,
 }))
 
+let supabaseClient: ReturnType<typeof createClient> | null = null
+let supabaseClientKey = ''
+
 function getSupabase() {
   const url = import.meta.env.VITE_SUPABASE_URL
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -1037,7 +1049,19 @@ function getSupabase() {
     return null
   }
 
-  return createClient(url, key)
+  const cacheKey = `${url}:${key}`
+  if (!supabaseClient || supabaseClientKey !== cacheKey) {
+    supabaseClient = createClient(url, key, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    })
+    supabaseClientKey = cacheKey
+  }
+
+  return supabaseClient
 }
 
 function formatNumber(value: number) {
@@ -3681,7 +3705,7 @@ function App() {
   }, [compositionTableSort, compositionTableSortDirection, compositionView.tableRows])
   useEffect(() => {
     document.documentElement.dataset.theme = theme
-    localStorage.setItem('simco-theme', theme)
+    writeJsonStorage('simco-theme', theme)
   }, [theme])
 
   useEffect(() => {
@@ -3711,7 +3735,10 @@ function App() {
       timeframe: compareTimeframe,
       height: comparisonHeight,
     }
-    localStorage.setItem(comparisonStateKey, JSON.stringify(currentState))
+    if (!writeJsonStorage(comparisonStateKey, currentState)) {
+      clearDataCache()
+      writeJsonStorage(comparisonStateKey, currentState)
+    }
   }, [
     comparisonKind,
     selectedComparisonRealm,
@@ -3726,7 +3753,10 @@ function App() {
   ])
 
   useEffect(() => {
-    localStorage.setItem(comparisonPresetsKey, JSON.stringify(comparisonPresets))
+    if (!writeJsonStorage(comparisonPresetsKey, comparisonPresets)) {
+      clearDataCache()
+      writeJsonStorage(comparisonPresetsKey, comparisonPresets)
+    }
   }, [comparisonPresets])
 
   useEffect(() => {
@@ -3770,7 +3800,7 @@ function App() {
       showVolume,
       chartCurve,
     }
-    localStorage.setItem(chartFiltersKey, JSON.stringify(filters))
+    writeJsonStorage(chartFiltersKey, filters)
   }, [showPhases, showEvents, showContests, showOrders, showUpdates, showTechnicals, showVolume, chartCurve])
 
   useEffect(() => {
@@ -4152,7 +4182,7 @@ function App() {
   }
 
   function dismissTour() {
-    localStorage.setItem(tourDismissedKey, 'true')
+    writeJsonStorage(tourDismissedKey, true)
     setShowTour(false)
   }
 
