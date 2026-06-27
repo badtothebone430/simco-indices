@@ -127,7 +127,7 @@ type PhaseRange = {
   realm_id: RealmId
   phase: 'boom' | 'normal' | 'recession' | string
   start_at: string
-  end_at: string
+  end_at: string | null
 }
 
 type RealmEvent = {
@@ -464,6 +464,13 @@ const tourSteps: TourStep[] = [
 ]
 
 const changelogEntries: ChangelogEntry[] = [
+  {
+    date: '2026-06-26',
+    title: 'Chart overlay fix',
+    items: [
+      'Fixed ongoing phase overlays so boom and recession bands stay clipped to the visible chart window.',
+    ],
+  },
   {
     date: '2026-06-25',
     title: 'Comparison stability fix',
@@ -1308,7 +1315,7 @@ async function loadChartContext(realmIds: RealmId[], startDate: string, endDate:
       .select('realm_id,phase,start_at,end_at')
       .in('realm_id', realmIds)
       .lte('start_at', `${endDate}T23:59:59Z`)
-      .gte('end_at', `${startDate}T00:00:00Z`),
+      .or(`end_at.gte.${startDate}T00:00:00Z,end_at.is.null`),
     supabase
       .from('realm_events')
       .select('realm_id,event_id,resource_id,resource_name,speed_modifier,since,until,produced_at_name')
@@ -2738,18 +2745,33 @@ function renderContextOverlays(
   const eventGroups = groupedEvents(context.events)
   const multiRealm = hasMultipleRealms(context)
   const axisProps = yAxisId ? { yAxisId } : {}
+  const chartStartDate = chartRows.at(0)?.date
+  const chartEndDate = chartRows.at(-1)?.date
+  const visiblePhaseBands =
+    chartStartDate && chartEndDate
+      ? context.phases
+          .filter((phase) => phase.phase !== 'normal')
+          .map((phase) => {
+            const phaseStart = toDateOnly(phase.start_at)
+            const phaseEnd = phase.end_at ? toDateOnly(phase.end_at) : chartEndDate
+            const x1 = phaseStart < chartStartDate ? chartStartDate : phaseStart
+            const x2 = phaseEnd > chartEndDate ? chartEndDate : phaseEnd
+
+            return x1 <= x2 ? { phase, x1, x2 } : null
+          })
+          .filter((phase): phase is { phase: PhaseRange; x1: string; x2: string } => Boolean(phase))
+      : []
 
   return (
     <>
       {showPhases &&
-        context.phases
-          .filter((phase) => phase.phase !== 'normal')
-          .map((phase, index) => (
+        visiblePhaseBands
+          .map(({ phase, x1, x2 }, index) => (
             <ReferenceArea
               {...axisProps}
               fill={phaseFill(phase)}
               fillOpacity={1}
-              ifOverflow="visible"
+              ifOverflow="hidden"
               key={`${keyPrefix}-phase-${phase.realm_id}-${phase.start_at}`}
               label={
                 multiRealm
@@ -2760,11 +2782,11 @@ function renderContextOverlays(
                       dy: topOverlayDy(index % 2),
                       position: 'insideTop',
                     }
-                  : undefined
+                : undefined
               }
               strokeOpacity={0}
-              x1={toDateOnly(phase.start_at)}
-              x2={toDateOnly(phase.end_at)}
+              x1={x1}
+              x2={x2}
             />
           ))}
       {showEvents &&
