@@ -6358,6 +6358,7 @@ function App() {
             className="feedback-card"
             data-netlify="true"
             data-netlify-honeypot="bot-field"
+            action="/feedback-success.html"
             method="POST"
             name="site-feedback"
             onSubmit={submitFeedback}
