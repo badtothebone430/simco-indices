@@ -88,6 +88,32 @@
   background: var(--hover);
 }
 
+.mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.mode-toggle.advanced {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.mode-toggle:hover {
+  color: var(--heading);
+  background: var(--hover);
+}
+
 .guided-tour {
   position: fixed;
   inset: 0;
@@ -346,7 +372,7 @@
   position: relative;
   z-index: 6;
   display: inline-grid;
-  grid-template-columns: repeat(6, minmax(118px, 1fr));
+  grid-template-columns: repeat(7, minmax(108px, 1fr));
   gap: 4px;
   padding: 4px;
   margin-bottom: 18px;
@@ -354,6 +380,10 @@
   border-radius: 7px;
   background: var(--surface);
   --active-tab: 0;
+}
+
+.view-tabs.beginner {
+  grid-template-columns: repeat(4, minmax(108px, 1fr));
 }
 
 .mobile-menu-button {
@@ -389,17 +419,25 @@
 }
 
 .view-tabs.tools {
-  --active-tab: 4;
+  --active-tab: 5;
 }
 
 .view-tabs.changelog {
-  --active-tab: 5;
+  --active-tab: 6;
+}
+
+.view-tabs.screener {
+  --active-tab: 4;
+}
+
+.view-tabs.beginner.tools {
+  --active-tab: 3;
 }
 
 .view-tabs::before {
   position: absolute;
   inset: 4px auto 4px 4px;
-  width: calc((100% - 28px) / 6);
+  width: calc((100% - 32px) / 7);
   border-radius: 5px;
   background: var(--elevated);
   box-shadow: var(--shadow-sm);
@@ -410,6 +448,10 @@
     background-color 180ms ease,
     box-shadow 180ms ease;
   will-change: transform;
+}
+
+.view-tabs.beginner::before {
+  width: calc((100% - 20px) / 4);
 }
 
 .clean-dashboard {
@@ -1452,6 +1494,91 @@
   max-height: 520px;
 }
 
+.screener-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(130px, 0.8fr)) minmax(240px, 1.6fr);
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.screener-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.screener-controls select,
+.screener-controls input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--heading);
+  background: var(--elevated);
+}
+
+.screener-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.screener-summary article {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--elevated);
+}
+
+.screener-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.screener-summary strong {
+  color: var(--heading);
+  font-size: 22px;
+}
+
+.screener-summary small {
+  color: var(--muted);
+}
+
+.screener-table {
+  max-height: 620px;
+}
+
+.screener-table table {
+  min-width: 1120px;
+}
+
+.screener-table td:first-child {
+  min-width: 240px;
+}
+
+.screener-table td small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.compact-button {
+  min-height: 32px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
 .empty-state {
   display: grid;
   place-items: center;
@@ -1874,8 +2001,13 @@ tbody tr:hover {
   }
 
   .comparison-controls,
-  .composition-controls {
+  .composition-controls,
+  .screener-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .screener-summary {
+    grid-template-columns: 1fr;
   }
 
   .composition-grid {
@@ -1985,7 +2117,8 @@ tbody tr:hover {
     width: auto;
   }
 
-  .composition-controls {
+  .composition-controls,
+  .screener-controls {
     grid-template-columns: 1fr;
   }
 

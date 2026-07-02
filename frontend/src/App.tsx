@@ -56,13 +56,16 @@ import './App.css'
 type RealmId = 0 | 1
 type IndexCode = string
 type Theme = 'light' | 'dark'
-type AppView = 'dashboard' | 'overview' | 'compare' | 'composition' | 'tools' | 'changelog'
+type ExperienceMode = 'beginner' | 'advanced'
+type AppView = 'dashboard' | 'overview' | 'compare' | 'composition' | 'screener' | 'tools' | 'changelog'
 type CompareMode = 'absolute' | 'percent'
 type CompareMetric = 'vwap' | 'market_value'
 type ComparisonKind = 'index' | 'resource'
 type Timeframe = '7d' | '12d' | '14d' | '30d' | '60d' | '90d' | 'all'
 type ResourceQualitySelection = number | 'weighted'
 type ChartCurve = 'smooth' | 'accurate'
+type ScreenerKind = 'all' | 'index' | 'resource'
+type ScreenerSortKey = 'name' | 'kind' | 'realm' | 'change1d' | 'timeframeChange' | 'rsi' | 'volume' | 'marketValue' | 'latestValue'
 
 type IndexDefinition = {
   code: IndexCode
@@ -188,13 +191,14 @@ type DashboardTarget =
       kind: 'index'
       realm: RealmId
       indexCode: IndexCode
+      indexName: string
     }
   | {
       kind: 'resource'
       realm: RealmId
       resourceId: number
       resourceName: string
-      quality: number
+      quality: ResourceQualitySelection
     }
 
 type DashboardSignal = {
@@ -234,6 +238,21 @@ type MarketDailyRow = {
   vwap: number
   volume: number
   market_value: number
+}
+
+type ScreenerRow = {
+  key: string
+  kind: 'index' | 'resource'
+  realm: RealmId
+  name: string
+  detail: string
+  latestValue: number
+  change1d: number | null
+  timeframeChange: number | null
+  rsi: number | null
+  volume: number | null
+  marketValue: number | null
+  target: DashboardTarget
 }
 
 type ComparisonPoint = {
@@ -330,6 +349,9 @@ type TourStep = {
   body: string
   task?: 'energy-crude-q3' | 'crude-weighted'
   interactive?: boolean
+  advanced?: boolean
+  firstVisitOnly?: boolean
+  returningOnly?: boolean
 }
 
 type ChangelogEntry = {
@@ -351,6 +373,11 @@ const comparisonStateKey = 'simco-comparison-state'
 const comparisonPresetsKey = 'simco-comparison-presets'
 const chartFiltersKey = 'simco-chart-filters'
 const tourDismissedKey = 'simco-tour-dismissed'
+const experienceModeKey = 'simco-experience-mode'
+
+function isAdvancedView(view: AppView) {
+  return view === 'composition' || view === 'screener' || view === 'changelog'
+}
 
 const tourSteps: TourStep[] = [
   {
@@ -370,6 +397,7 @@ const tourSteps: TourStep[] = [
     view: 'dashboard',
     title: 'Layer context',
     body: 'Toggle phases, events, contests, government orders, and technicals on charts whenever you need more context.',
+    advanced: true,
   },
   {
     selector: '.market-summary-grid',
@@ -388,6 +416,7 @@ const tourSteps: TourStep[] = [
     view: 'dashboard',
     title: 'Technical setup',
     body: 'This highlights the strongest technical resource setup and shows zones or channels directly on the mini chart.',
+    advanced: true,
   },
   {
     selector: '.index-grid',
@@ -450,6 +479,41 @@ const tourSteps: TourStep[] = [
     interactive: true,
   },
   {
+    selector: '.mode-toggle',
+    view: 'dashboard',
+    title: 'Beginner mode',
+    body: 'First-time visits start in Beginner mode, which keeps the main dashboard, overview, comparisons, and tools visible while hiding advanced workspaces.',
+    firstVisitOnly: true,
+  },
+  {
+    selector: '.mode-toggle',
+    view: 'dashboard',
+    title: 'Switch modes',
+    body: 'Use this toggle whenever you want to switch between the simpler view and the full advanced toolkit.',
+    returningOnly: true,
+  },
+  {
+    selector: '.screener-panel',
+    view: 'screener',
+    title: 'Scan the market',
+    body: 'The screener ranks resources and indices by change, RSI, volume, and market value using the data already loaded for the site.',
+    advanced: true,
+  },
+  {
+    selector: '.screener-controls',
+    view: 'screener',
+    title: 'Filter quickly',
+    body: 'Realm, type, timeframe, search, and sorting help narrow the list without adding new database storage.',
+    advanced: true,
+  },
+  {
+    selector: '.screener-table',
+    view: 'screener',
+    title: 'Open a setup',
+    body: 'Use Go To on any row to open that index or resource directly in Comparisons.',
+    advanced: true,
+  },
+  {
     selector: '.tools-panel',
     view: 'tools',
     title: 'Useful tools',
@@ -460,19 +524,30 @@ const tourSteps: TourStep[] = [
     view: 'changelog',
     title: 'Track updates',
     body: 'The changelog lists recent feature releases and data changes in one place.',
+    advanced: true,
   },
 ]
 
 const changelogEntries: ChangelogEntry[] = [
   {
-    date: '2026-06-26',
+    date: '2026-06-27',
+    title: 'Market screener and RSI',
+    items: [
+      'Added Screener tab for sorting resources and indices by change, liquidity, market value, and RSI.',
+      'Added 14-period RSI calculations using existing retained market history without increasing database storage.',
+      'Added Beginner and Advanced modes so new users can start with a simpler interface.',
+      'Added Screener and mode-switching cards to the guided tour with an option to skip advanced tips.',
+    ],
+  },
+  {
+    date: '2026-06-27',
     title: 'Chart overlay fix',
     items: [
       'Fixed ongoing phase overlays so boom and recession bands stay clipped to the visible chart window.',
     ],
   },
   {
-    date: '2026-06-25',
+    date: '2026-06-27',
     title: 'Comparison stability fix',
     items: [
       'Fixed a blank-screen crash when saved comparison state could not be written to browser storage.',
@@ -480,7 +555,7 @@ const changelogEntries: ChangelogEntry[] = [
     ],
   },
   {
-    date: '2026-06-19',
+    date: '2026-06-27',
     title: 'Composition table analytics',
     items: [
       'Added sortable composition tables with daily and timeframe VWAP change columns.',
@@ -1234,6 +1309,221 @@ async function loadIndexSeries(realm: RealmId, indexCode: IndexCode) {
   return data as IndexPoint[]
 }
 
+async function loadMarketDailyRows(realm: RealmId, timeframe: Timeframe) {
+  const supabase = getSupabase()
+  if (!supabase) {
+    return []
+  }
+
+  const pageSize = 1000
+  let from = 0
+  const rows: MarketDailyRow[] = []
+  const startDate = (() => {
+    const days = timeframeDays(timeframe)
+    if (!days) return null
+    const date = new Date()
+    date.setUTCDate(date.getUTCDate() - days + 1)
+    return date.toISOString().slice(0, 10)
+  })()
+
+  while (true) {
+    let query = supabase
+      .from('market_daily')
+      .select('date,resource_id,resource_name,quality,vwap,volume,market_value')
+      .eq('realm_id', realm)
+      .order('date', { ascending: true })
+      .range(from, from + pageSize - 1)
+
+    if (startDate) {
+      query = query.gte('date', startDate)
+    }
+
+    const { data, error } = await query
+    if (error) return rows
+
+    rows.push(...((data ?? []) as MarketDailyRow[]))
+    if (!data || data.length < pageSize) break
+    from += pageSize
+  }
+
+  return rows
+}
+
+function relativeChange(current?: number, previous?: number) {
+  return typeof current === 'number' && typeof previous === 'number' && previous > 0
+    ? current / previous - 1
+    : null
+}
+
+function calculateRsi(values: number[], period = 14) {
+  if (values.length <= period) return null
+
+  const changes = values.slice(1).map((value, index) => value - values[index])
+  const recentChanges = changes.slice(-period)
+  const gains = recentChanges.reduce((sum, change) => sum + Math.max(change, 0), 0) / period
+  const losses = recentChanges.reduce((sum, change) => sum + Math.max(-change, 0), 0) / period
+
+  if (losses === 0 && gains === 0) return 50
+  if (losses === 0) return 100
+
+  const relativeStrength = gains / losses
+  return 100 - 100 / (1 + relativeStrength)
+}
+
+function buildSeriesScreenerRow(
+  key: string,
+  kind: ScreenerRow['kind'],
+  realm: RealmId,
+  name: string,
+  detail: string,
+  series: Array<{ date: string; value: number; volume?: number; marketValue?: number }>,
+  target: DashboardTarget,
+): ScreenerRow | null {
+  const rows = [...series]
+    .filter((row) => row.date && Number.isFinite(row.value))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  if (!rows.length) return null
+
+  const latest = rows.at(-1)!
+  const previous = rows.at(-2)
+  const first = rows[0]
+
+  return {
+    key,
+    kind,
+    realm,
+    name,
+    detail,
+    latestValue: latest.value,
+    change1d: relativeChange(latest.value, previous?.value),
+    timeframeChange: relativeChange(latest.value, first.value),
+    rsi: calculateRsi(rows.map((row) => row.value)),
+    volume: latest.volume ?? null,
+    marketValue: latest.marketValue ?? null,
+    target,
+  }
+}
+
+function buildResourceScreenerRows(realm: RealmId, marketRows: MarketDailyRow[]) {
+  const grouped = new Map<string, MarketDailyRow[]>()
+  const weighted = new Map<number, Map<string, { value: number; volume: number; marketValue: number; name: string }>>()
+
+  for (const row of marketRows) {
+    const qualityKey = `${row.resource_id}-q${row.quality}`
+    grouped.set(qualityKey, [...(grouped.get(qualityKey) ?? []), row])
+
+    const resourceRows = weighted.get(row.resource_id) ?? new Map()
+    const current = resourceRows.get(row.date) ?? {
+      value: 0,
+      volume: 0,
+      marketValue: 0,
+      name: row.resource_name,
+    }
+    current.volume += row.volume
+    current.marketValue += row.market_value
+    current.value += row.vwap * row.volume
+    resourceRows.set(row.date, current)
+    weighted.set(row.resource_id, resourceRows)
+  }
+
+  const qualityRows = Array.from(grouped.entries()).flatMap(([key, rows]) => {
+    const latest = rows.at(-1)
+    if (!latest) return []
+    const result = buildSeriesScreenerRow(
+      `resource-${realm}-${key}`,
+      'resource',
+      realm,
+      `${latest.resource_name} Q${latest.quality}`,
+      `Resource quality pair`,
+      rows.map((row) => ({
+        date: row.date,
+        value: row.vwap,
+        volume: row.volume,
+        marketValue: row.market_value,
+      })),
+      {
+        kind: 'resource',
+        realm,
+        resourceId: latest.resource_id,
+        resourceName: latest.resource_name,
+        quality: latest.quality,
+      },
+    )
+    return result ? [result] : []
+  })
+
+  const weightedRows = Array.from(weighted.entries()).flatMap(([resourceId, dateRows]) => {
+    const rows = Array.from(dateRows.entries()).map(([date, row]) => ({
+      date,
+      value: row.volume > 0 ? row.value / row.volume : 0,
+      volume: row.volume,
+      marketValue: row.marketValue,
+      name: row.name,
+    }))
+    const latest = rows.at(-1)
+    if (!latest) return []
+    const result = buildSeriesScreenerRow(
+      `resource-${realm}-${resourceId}-weighted`,
+      'resource',
+      realm,
+      `${latest.name} Weighted`,
+      'All qualities weighted by volume',
+      rows,
+      {
+        kind: 'resource',
+        realm,
+        resourceId,
+        resourceName: latest.name,
+        quality: 'weighted',
+      },
+    )
+    return result ? [result] : []
+  })
+
+  return [...weightedRows, ...qualityRows]
+}
+
+async function loadScreenerRows(
+  realmsToLoad: RealmId[],
+  definitions: IndexDefinition[],
+  timeframe: Timeframe,
+) {
+  const rows: ScreenerRow[] = []
+
+  for (const realmId of realmsToLoad) {
+    const marketRows = await loadMarketDailyRows(realmId, timeframe)
+    rows.push(...buildResourceScreenerRows(realmId, marketRows))
+
+    const indexRows = await Promise.all(
+      definitions.map(async (definition) => {
+        const series = filterByTimeframe((await loadIndexSeries(realmId, definition.code)) ?? [], timeframe)
+        return buildSeriesScreenerRow(
+          `index-${realmId}-${definition.code}`,
+          'index',
+          realmId,
+          definition.name,
+          definition.method,
+          series.map((row) => ({
+            date: row.date,
+            value: row.value,
+            marketValue: row.total_market_value,
+          })),
+          {
+            kind: 'index',
+            realm: realmId,
+            indexCode: definition.code,
+            indexName: definition.name,
+          },
+        )
+      }),
+    )
+    rows.push(...indexRows.filter((row): row is ScreenerRow => Boolean(row)))
+  }
+
+  return rows
+}
+
 async function loadIndexComponents(realm: RealmId, indexCode: IndexCode, date: string) {
   const supabase = getSupabase()
   if (!supabase) {
@@ -1833,6 +2123,7 @@ async function loadDashboard() {
               kind: 'index',
               realm: watchEvent.realm_id,
               indexCode: 'total_market',
+              indexName: 'Total Market',
             },
           } satisfies DashboardSignal
         }
@@ -3303,6 +3594,21 @@ function DashboardDetail({
   )
 }
 
+function formatNullablePercent(value: number | null) {
+  return value === null ? '-' : formatPercent(value)
+}
+
+function formatNullableNumber(value: number | null) {
+  return value === null ? '-' : formatNumber(value)
+}
+
+function sortNullableNumber(left: number | null, right: number | null) {
+  if (left === null && right === null) return 0
+  if (left === null) return -1
+  if (right === null) return 1
+  return left - right
+}
+
 function RefreshProgress({ active }: { active: boolean }) {
   const [progress, setProgress] = useState(active ? 12 : 100)
 
@@ -3386,6 +3692,7 @@ function GuidedTour({
   onBack,
   onDismiss,
   onNext,
+  onSkipAdvanced,
 }: {
   steps: TourStep[]
   stepIndex: number
@@ -3393,6 +3700,7 @@ function GuidedTour({
   onBack: () => void
   onDismiss: () => void
   onNext: () => void
+  onSkipAdvanced: () => void
 }) {
   const step = steps[stepIndex]
   const [rect, setRect] = useState<SpotlightRect | null>(null)
@@ -3469,6 +3777,11 @@ function GuidedTour({
             Skip
           </button>
           <div>
+            {step.advanced && (
+              <button className="ghost-button" onClick={onSkipAdvanced} type="button">
+                Skip advanced tips
+              </button>
+            )}
             <button className="ghost-button" disabled={stepIndex === 0} onClick={onBack} type="button">
               Back
             </button>
@@ -3484,6 +3797,7 @@ function GuidedTour({
 
 function App() {
   const sharedComparison = useMemo(() => sharedComparisonFromUrl(), [])
+  const isFirstVisit = useMemo(() => localStorage.getItem(tourDismissedKey) !== 'true', [])
   const storedComparisonState = useMemo(
     () => ({
       ...readJsonStorage<Partial<ComparisonState>>(comparisonStateKey, {}),
@@ -3502,6 +3816,11 @@ function App() {
   const [realm, setRealm] = useState<RealmId>(0)
   const [selectedIndex, setSelectedIndex] = useState<IndexCode>('total_market')
   const [q0IncludesResearch, setQ0IncludesResearch] = useState(false)
+  const [experienceMode, setExperienceMode] = useState<ExperienceMode>(() => {
+    const stored = localStorage.getItem(experienceModeKey)
+    if (stored === 'beginner' || stored === 'advanced') return stored
+    return isFirstVisit ? 'beginner' : 'advanced'
+  })
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem('simco-theme')
     if (stored === 'light' || stored === 'dark') return stored
@@ -3549,6 +3868,14 @@ function App() {
   const [compositionTableSortDirection, setCompositionTableSortDirection] = useState<SortDirection>('desc')
   const [compositionRows, setCompositionRows] = useState<CompositionComponentRow[]>([])
   const [isCompositionLoading, setIsCompositionLoading] = useState(false)
+  const [screenerRealm, setScreenerRealm] = useState<RealmId | 'both'>('both')
+  const [screenerKind, setScreenerKind] = useState<ScreenerKind>('all')
+  const [screenerTimeframe, setScreenerTimeframe] = useState<Timeframe>('30d')
+  const [screenerSearch, setScreenerSearch] = useState('')
+  const [screenerSort, setScreenerSort] = useState<ScreenerSortKey>('rsi')
+  const [screenerSortDirection, setScreenerSortDirection] = useState<SortDirection>('desc')
+  const [screenerRows, setScreenerRows] = useState<ScreenerRow[]>([])
+  const [isScreenerLoading, setIsScreenerLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
   const [shareStatus, setShareStatus] = useState('')
   const [comparisonPresets, setComparisonPresets] = useState<ComparisonPreset[]>(() =>
@@ -3581,13 +3908,26 @@ function App() {
   const [updateCountdown, setUpdateCountdown] = useState(() => formatCountdown(nextUpdateDate()))
   const [showCollectionNotice, setShowCollectionNotice] = useState(() => isCollectionWindow())
   const [showTour, setShowTour] = useState(
-    () => !sharedComparison && localStorage.getItem(tourDismissedKey) !== 'true',
+    () => !sharedComparison && isFirstVisit,
   )
   const [tourStepIndex, setTourStepIndex] = useState(0)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
   const [dataRefreshToken, setDataRefreshToken] = useState(0)
+  const visibleTourSteps = useMemo(
+    () =>
+      tourSteps.filter((step) => {
+        if (step.firstVisitOnly && !isFirstVisit) return false
+        if (step.returningOnly && isFirstVisit) return false
+        if (experienceMode === 'beginner' && step.advanced) return false
+        return true
+      }),
+    [experienceMode, isFirstVisit],
+  )
 
-  const qualityDefinitions = qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch))
+  const qualityDefinitions = useMemo(
+    () => qualityLevels.map((quality) => qualityIndexDefinition(quality, q0IncludesResearch)),
+    [q0IncludesResearch],
+  )
   const allIndexDefinitions = useMemo(
     () => [...indexDefinitions, ...qualityDefinitions],
     [qualityDefinitions],
@@ -3733,10 +4073,59 @@ function App() {
       return compositionTableSortDirection === 'asc' ? comparison : -comparison
     })
   }, [compositionTableSort, compositionTableSortDirection, compositionView.tableRows])
+  const filteredScreenerRows = useMemo(() => {
+    const search = screenerSearch.trim().toLowerCase()
+    const valueFor = (row: ScreenerRow): string | number | null => {
+      switch (screenerSort) {
+        case 'name':
+          return row.name
+        case 'kind':
+          return row.kind
+        case 'realm':
+          return row.realm
+        case 'change1d':
+          return row.change1d
+        case 'timeframeChange':
+          return row.timeframeChange
+        case 'rsi':
+          return row.rsi
+        case 'volume':
+          return row.volume
+        case 'marketValue':
+          return row.marketValue
+        case 'latestValue':
+          return row.latestValue
+      }
+    }
+
+    return screenerRows
+      .filter((row) => screenerKind === 'all' || row.kind === screenerKind)
+      .filter((row) => !search || `${row.name} ${row.detail} ${realms[row.realm]} ${row.kind}`.toLowerCase().includes(search))
+      .sort((left, right) => {
+        const leftValue = valueFor(left)
+        const rightValue = valueFor(right)
+        const comparison =
+          typeof leftValue === 'string' && typeof rightValue === 'string'
+            ? leftValue.localeCompare(rightValue)
+            : sortNullableNumber(
+                typeof leftValue === 'number' ? leftValue : null,
+                typeof rightValue === 'number' ? rightValue : null,
+              )
+        return screenerSortDirection === 'asc' ? comparison : -comparison
+      })
+      .slice(0, 300)
+  }, [screenerRows, screenerKind, screenerSearch, screenerSort, screenerSortDirection])
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     writeJsonStorage('simco-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    writeJsonStorage(experienceModeKey, experienceMode)
+    if (experienceMode === 'beginner' && isAdvancedView(activeView)) {
+      setActiveView('dashboard')
+    }
+  }, [activeView, experienceMode])
 
   useEffect(() => {
     function refreshCountdown() {
@@ -3959,6 +4348,35 @@ function App() {
       isCurrent = false
     }
   }, [compositionRealm, compositionIndex, compositionTimeframe, dataRefreshToken])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function refreshScreener() {
+      const realmsToLoad: RealmId[] = screenerRealm === 'both' ? [0, 1] : [screenerRealm]
+      const cacheKey = `screener:${realmsToLoad.join(',')}:${screenerTimeframe}:${q0IncludesResearch ? 'q0r' : 'q0'}`
+      const cached = readDataCache<ScreenerRow[]>(cacheKey)
+      if (cached) {
+        setScreenerRows(cached)
+        return
+      }
+
+      setIsScreenerLoading(true)
+      const rows = await loadScreenerRows(realmsToLoad, allIndexDefinitions, screenerTimeframe)
+
+      if (!isCurrent) return
+
+      setScreenerRows(rows)
+      writeDataCache(cacheKey, rows)
+      setIsScreenerLoading(false)
+    }
+
+    refreshScreener()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [allIndexDefinitions, q0IncludesResearch, screenerRealm, screenerTimeframe, dataRefreshToken])
 
   useEffect(() => {
     if (comparisonKind === 'resource' && storedComparisonState.selectedQuality === undefined) {
@@ -4258,24 +4676,39 @@ function App() {
 
   useEffect(() => {
     if (!showTour) return
-    const step = tourSteps[tourStepIndex]
+    const step = visibleTourSteps[tourStepIndex]
+    if (!step) {
+      setTourStepIndex(0)
+      return
+    }
     setActiveView(step.view)
-  }, [showTour, tourStepIndex])
+  }, [showTour, tourStepIndex, visibleTourSteps])
 
   function nextTourStep() {
-    if (tourStepIndex >= tourSteps.length - 1) {
+    if (tourStepIndex >= visibleTourSteps.length - 1) {
       dismissTour()
       return
     }
     const nextIndex = tourStepIndex + 1
-    setActiveView(tourSteps[nextIndex].view)
+    setActiveView(visibleTourSteps[nextIndex].view)
     setTourStepIndex(nextIndex)
   }
 
   function previousTourStep() {
     const previousIndex = Math.max(0, tourStepIndex - 1)
-    setActiveView(tourSteps[previousIndex].view)
+    setActiveView(visibleTourSteps[previousIndex].view)
     setTourStepIndex(previousIndex)
+  }
+
+  function skipAdvancedTourTips() {
+    const nextIndex = visibleTourSteps.findIndex((step, index) => index > tourStepIndex && !step.advanced)
+    if (nextIndex === -1) {
+      dismissTour()
+      return
+    }
+
+    setActiveView(visibleTourSteps[nextIndex].view)
+    setTourStepIndex(nextIndex)
   }
 
   function goToDashboardTarget(target: DashboardTarget) {
@@ -4322,6 +4755,67 @@ function App() {
     setCompositionTableSortDirection(sort === 'name' || sort === 'firstSeen' ? 'asc' : 'desc')
   }
 
+  function toggleScreenerSort(sort: ScreenerSortKey) {
+    if (screenerSort === sort) {
+      setScreenerSortDirection((direction) => (direction === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+
+    setScreenerSort(sort)
+    setScreenerSortDirection(sort === 'name' || sort === 'kind' || sort === 'realm' ? 'asc' : 'desc')
+  }
+
+  function screenerSortHeader(label: string, sort: ScreenerSortKey) {
+    const active = screenerSort === sort
+    return (
+      <th aria-sort={active ? (screenerSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}>
+        <button
+          className={`table-sort-button${active ? ' active' : ''}`}
+          onClick={() => toggleScreenerSort(sort)}
+          type="button"
+        >
+          {label}
+          <ArrowUpDown size={13} />
+        </button>
+      </th>
+    )
+  }
+
+  function openScreenerRow(row: ScreenerRow) {
+    if (row.target.kind === 'index') {
+      setComparisonKind('index')
+      setSelectedComparisonRealm(row.realm)
+      setSelectedComparisonIndex(row.target.indexCode)
+      setComparisonSelections([
+        {
+          key: `r${row.realm}i${row.target.indexCode}`,
+          kind: 'index',
+          realm: row.realm,
+          indexCode: row.target.indexCode,
+          indexName: row.target.indexName,
+        },
+      ])
+    } else {
+      setComparisonKind('resource')
+      setSelectedComparisonRealm(row.realm)
+      setSelectedResourceId(row.target.resourceId.toString())
+      setSelectedQuality(row.target.quality)
+      setComparisonSelections([
+        {
+          key: `r${row.realm}r${row.target.resourceId}q${resourceQualityKey(row.target.quality)}`,
+          kind: 'resource',
+          realm: row.realm,
+          resourceId: row.target.resourceId,
+          resourceName: row.target.resourceName,
+          quality: row.target.quality,
+        },
+      ])
+    }
+
+    setCompareTimeframe(screenerTimeframe)
+    setActiveView('compare')
+  }
+
   function selectView(view: AppView) {
     setActiveView(view)
     setIsMobileNavOpen(false)
@@ -4348,7 +4842,8 @@ function App() {
     )
   }
 
-  const isAnyMarketDataLoading = isLoading || isDashboardLoading || isComparisonLoading || isCompositionLoading
+  const isAnyMarketDataLoading =
+    isLoading || isDashboardLoading || isComparisonLoading || isCompositionLoading || isScreenerLoading
   const chartOverlayControls = (
     <section className="chart-overlay-controls" aria-label="Chart overlays">
       <button
@@ -4428,6 +4923,16 @@ function App() {
             <CircleHelp size={18} />
           </button>
           <button
+            aria-label={`Use ${experienceMode === 'advanced' ? 'beginner' : 'advanced'} mode`}
+            className={`mode-toggle ${experienceMode}`}
+            onClick={() => setExperienceMode((current) => current === 'advanced' ? 'beginner' : 'advanced')}
+            title="Toggle beginner and advanced mode"
+            type="button"
+          >
+            <Sparkles size={16} />
+            {experienceMode === 'advanced' ? 'Advanced' : 'Beginner'}
+          </button>
+          <button
             aria-label="Refresh market data"
             className="icon-button"
             onClick={refreshMarketData}
@@ -4494,7 +4999,7 @@ function App() {
       </button>
 
       <nav
-        className={`view-tabs ${activeView} ${isMobileNavOpen ? 'open' : ''}`}
+        className={`view-tabs ${experienceMode} ${activeView} ${isMobileNavOpen ? 'open' : ''}`}
         id="primary-navigation"
         aria-label="Views"
       >
@@ -4522,14 +5027,26 @@ function App() {
           <BarChart3 size={16} />
           Comparisons
         </button>
-        <button
-          className={activeView === 'composition' ? 'active' : ''}
-          onClick={() => selectView('composition')}
-          type="button"
-        >
-          <Layers size={16} />
-          Composition
-        </button>
+        {experienceMode === 'advanced' && (
+          <button
+            className={activeView === 'composition' ? 'active' : ''}
+            onClick={() => selectView('composition')}
+            type="button"
+          >
+            <Layers size={16} />
+            Composition
+          </button>
+        )}
+        {experienceMode === 'advanced' && (
+          <button
+            className={activeView === 'screener' ? 'active' : ''}
+            onClick={() => selectView('screener')}
+            type="button"
+          >
+            <ArrowUpDown size={16} />
+            Screener
+          </button>
+        )}
         <button
           className={activeView === 'tools' ? 'active' : ''}
           onClick={() => selectView('tools')}
@@ -4538,17 +5055,23 @@ function App() {
           <Hammer size={16} />
           Tools
         </button>
-        <button
-          className={activeView === 'changelog' ? 'active' : ''}
-          onClick={() => selectView('changelog')}
-          type="button"
-        >
-          <FileText size={16} />
-          Changelog
-        </button>
+        {experienceMode === 'advanced' && (
+          <button
+            className={activeView === 'changelog' ? 'active' : ''}
+            onClick={() => selectView('changelog')}
+            type="button"
+          >
+            <FileText size={16} />
+            Changelog
+          </button>
+        )}
       </nav>
 
-      {activeView !== 'compare' && activeView !== 'composition' && chartOverlayControls}
+      {experienceMode === 'advanced' &&
+        activeView !== 'compare' &&
+        activeView !== 'composition' &&
+        activeView !== 'screener' &&
+        chartOverlayControls}
 
       {activeView === 'dashboard' && (
         <section className="clean-dashboard view-panel">
@@ -4582,6 +5105,7 @@ function App() {
                       kind: 'index',
                       realm: market.realm,
                       indexCode: 'total_market',
+                      indexName: 'Total Market',
                     })}
                     type="button"
                   >
@@ -4884,10 +5408,12 @@ function App() {
                 <h2>All Components</h2>
               </div>
               <div className="panel-actions">
-                <button className="ghost-button" onClick={viewCurrentComposition} type="button">
-                  <Layers size={15} />
-                  View Composition
-                </button>
+                {experienceMode === 'advanced' && (
+                  <button className="ghost-button" onClick={viewCurrentComposition} type="button">
+                    <Layers size={15} />
+                    View Composition
+                  </button>
+                )}
                 <span className="loading-state">
                   <RefreshCw className={isLoading ? 'spin' : ''} size={15} />
                   {isLoading ? 'Refreshing' : 'Ready'}
@@ -5130,7 +5656,7 @@ function App() {
             )}
           </div>
 
-          {chartOverlayControls}
+          {experienceMode === 'advanced' && chartOverlayControls}
 
           <div className="comparison-chart" style={{ height: comparisonHeight }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -5518,6 +6044,135 @@ function App() {
             </div>
           </section>
         </section>
+      ) : activeView === 'screener' ? (
+        <section className="screener-panel view-panel">
+          <div className="panel-header comparison-heading">
+            <div>
+              <p className="eyebrow">Screener</p>
+              <h2>Market scanner</h2>
+              <p>Find resources and indices by change, liquidity, market value, and 14-period RSI.</p>
+            </div>
+            <span className="loading-state">
+              <RefreshCw className={isScreenerLoading ? 'spin' : ''} size={15} />
+              {isScreenerLoading ? 'Refreshing' : 'Ready'}
+            </span>
+          </div>
+
+          <div className="screener-controls">
+            <label>
+              Realm
+              <select
+                value={screenerRealm}
+                onChange={(event) =>
+                  setScreenerRealm(event.target.value === 'both' ? 'both' : Number(event.target.value) as RealmId)
+                }
+              >
+                <option value="both">Both realms</option>
+                {Object.entries(realms).map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Type
+              <select value={screenerKind} onChange={(event) => setScreenerKind(event.target.value as ScreenerKind)}>
+                <option value="all">All</option>
+                <option value="index">Indices</option>
+                <option value="resource">Resources</option>
+              </select>
+            </label>
+            <label>
+              Timeframe
+              <select
+                value={screenerTimeframe}
+                onChange={(event) => setScreenerTimeframe(event.target.value as Timeframe)}
+              >
+                <option value="7d">7D</option>
+                <option value="14d">14D</option>
+                <option value="30d">30D</option>
+                <option value="60d">60D</option>
+                <option value="90d">90D</option>
+              </select>
+            </label>
+            <label className="screener-search">
+              Search
+              <input
+                value={screenerSearch}
+                onChange={(event) => setScreenerSearch(event.target.value)}
+                placeholder="Power, Energy, Q3..."
+              />
+            </label>
+          </div>
+
+          <div className="screener-summary">
+            <article>
+              <span>Results</span>
+              <strong>{filteredScreenerRows.length}</strong>
+              <small>showing top 300 after filters</small>
+            </article>
+            <article>
+              <span>RSI</span>
+              <strong>14</strong>
+              <small>calculated from retained daily closes</small>
+            </article>
+            <article>
+              <span>Data</span>
+              <strong>{screenerTimeframe.toUpperCase()}</strong>
+              <small>no extra database storage</small>
+            </article>
+          </div>
+
+          <div className="table-wrap screener-table">
+            <table>
+              <thead>
+                <tr>
+                  {screenerSortHeader('Name', 'name')}
+                  {screenerSortHeader('Type', 'kind')}
+                  {screenerSortHeader('Realm', 'realm')}
+                  {screenerSortHeader('Latest', 'latestValue')}
+                  {screenerSortHeader('1D', 'change1d')}
+                  {screenerSortHeader(screenerTimeframe.toUpperCase(), 'timeframeChange')}
+                  {screenerSortHeader('RSI', 'rsi')}
+                  {screenerSortHeader('Volume', 'volume')}
+                  {screenerSortHeader('Market Value', 'marketValue')}
+                  <th>Open</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredScreenerRows.map((row) => (
+                  <tr key={row.key}>
+                    <td>
+                      <strong>{row.name}</strong>
+                      <small>{row.detail}</small>
+                    </td>
+                    <td>{row.kind === 'index' ? 'Index' : 'Resource'}</td>
+                    <td>{realms[row.realm]}</td>
+                    <td>{formatNumber(row.latestValue)}</td>
+                    <td className={row.change1d === null ? '' : row.change1d >= 0 ? 'positive' : 'negative'}>
+                      {formatNullablePercent(row.change1d)}
+                    </td>
+                    <td className={row.timeframeChange === null ? '' : row.timeframeChange >= 0 ? 'positive' : 'negative'}>
+                      {formatNullablePercent(row.timeframeChange)}
+                    </td>
+                    <td className={row.rsi === null ? '' : row.rsi >= 70 ? 'negative' : row.rsi <= 30 ? 'positive' : ''}>
+                      {formatNullableNumber(row.rsi)}
+                    </td>
+                    <td>{row.volume === null ? '-' : formatCompact(row.volume)}</td>
+                    <td>{row.marketValue === null ? '-' : formatCompact(row.marketValue)}</td>
+                    <td>
+                      <button className="ghost-button compact-button" onClick={() => openScreenerRow(row)} type="button">
+                        <ArrowUpRight size={14} />
+                        Go To
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : activeView === 'tools' ? (
         <section className="tools-panel view-panel">
           <div className="panel-header">
@@ -5561,7 +6216,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.2.5</strong>
+              <strong>v1.3.1</strong>
             </div>
           </div>
 
@@ -5602,12 +6257,13 @@ function App() {
 
       {showTour && (
         <GuidedTour
-          canContinue={tourTaskComplete(tourSteps[tourStepIndex].task)}
+          canContinue={tourTaskComplete(visibleTourSteps[tourStepIndex]?.task)}
           onBack={previousTourStep}
           onDismiss={dismissTour}
           onNext={nextTourStep}
+          onSkipAdvanced={skipAdvancedTourTips}
           stepIndex={tourStepIndex}
-          steps={tourSteps}
+          steps={visibleTourSteps}
         />
       )}
     </main>
