@@ -507,7 +507,7 @@ function toDateOnly(value) {
 
 function retentionCutoffDate(days = DATA_RETENTION_DAYS) {
   const cutoff = new Date()
-  cutoff.setUTCDate(cutoff.getUTCDate() - days)
+  cutoff.setUTCDate(cutoff.getUTCDate() - Math.max(0, days - 1))
   return cutoff.toISOString().slice(0, 10)
 }
 

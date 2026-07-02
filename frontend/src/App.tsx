@@ -530,6 +530,15 @@ const tourSteps: TourStep[] = [
 
 const changelogEntries: ChangelogEntry[] = [
   {
+    date: '2026-07-01',
+    title: 'Index weighting and update labels',
+    items: [
+      'Added lagged-weight index recalculation tooling so index returns use the previous day basket weights.',
+      'Filtered index charts to the retained 90-day window to avoid stale filler rows.',
+      'Improved fixed game update labels and tooltip context on charts.',
+    ],
+  },
+  {
     date: '2026-06-27',
     title: 'Market screener and RSI',
     items: [
@@ -841,7 +850,8 @@ type CachedValue<T> = {
   value: T
 }
 
-const dataCachePrefix = 'simco-data-cache:v6:'
+const dataCachePrefix = 'simco-data-cache:v7:'
+const retainedMarketDays = 90
 
 function latestUpdateCycleKey(now = new Date()) {
   // The collector starts at 01:20 UTC, but cache should expire when new data is expected to be visible.
@@ -854,6 +864,12 @@ function latestUpdateCycleKey(now = new Date()) {
   }
 
   return update.toISOString().slice(0, 10)
+}
+
+function retainedMarketStartDate(now = new Date()) {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  start.setUTCDate(start.getUTCDate() - retainedMarketDays + 1)
+  return start.toISOString().slice(0, 10)
 }
 
 function dataCacheKey(key: string) {
@@ -1299,6 +1315,7 @@ async function loadIndexSeries(realm: RealmId, indexCode: IndexCode) {
     .select('date,value,realm_id,index_code,component_count,total_market_value')
     .eq('realm_id', realm)
     .eq('index_code', indexCode)
+    .gte('date', retainedMarketStartDate())
     .order('date', { ascending: true })
     .range(0, 4999)
 
@@ -2804,8 +2821,9 @@ function contextItemsForDate(context: ChartContext, date: string) {
   const governmentOrders = context.governmentOrders.filter(
     (order) => order.created_at <= at && (!order.due_at || order.due_at >= at),
   )
+  const fixedUpdates = fixedGameUpdates.filter((update) => date >= update.date && date <= (update.endDate ?? update.date))
 
-  return { events, contests, governmentOrders }
+  return { events, contests, governmentOrders, fixedUpdates }
 }
 
 function hasMultipleRealms(context: ChartContext) {
@@ -3007,9 +3025,12 @@ function OverlayReferenceLabel({
 }) {
   const box =
     viewBox && typeof viewBox === 'object'
-      ? viewBox as { x?: unknown; y?: unknown; height?: unknown }
+      ? viewBox as { x?: unknown; y?: unknown; width?: unknown; height?: unknown }
       : {}
-  const x = Number(box.x ?? 0) + xOffset
+  const rawX = Number(box.x ?? 0) + xOffset
+  const labelWidth = Math.min(220, Math.max(76, label.length * 6.4))
+  const chartRight = Number(box.width ?? 0) > 0 ? Number(box.x ?? 0) + Number(box.width ?? 0) : rawX + labelWidth
+  const x = Math.min(Math.max(rawX, 6), Math.max(6, chartRight - labelWidth))
   const y = Number(box.y ?? 0) + Number(box.height ?? 0) * slot
   return (
     <text fill={color} fontSize={11} textAnchor="start" x={x} y={y}>
@@ -3202,12 +3223,20 @@ function renderContextOverlays(
           ]
         })}
       {showUpdates &&
-        fixedGameUpdates.map((update, index) => {
+        fixedGameUpdates.flatMap((update, index) => {
+          if (!chartStartDate || !chartEndDate) return []
+          const updateStart = update.date
+          const updateEnd = update.endDate ?? update.date
+          const visibleStart = updateStart < chartStartDate ? chartStartDate : updateStart
+          const visibleEnd = updateEnd > chartEndDate ? chartEndDate : updateEnd
+          if (visibleStart > visibleEnd) return []
+          const labelDate = update.endDate ? visibleEnd : visibleStart
+
           const slot = safeOverlayLabelSlot(
             chartRows,
             valueKeys,
-            update.date,
-            update.endDate ?? null,
+            labelDate,
+            labelDate,
             index,
             reservedLabelRatios,
           )
@@ -3224,22 +3253,22 @@ function renderContextOverlays(
                     label={update.label}
                     slot={slot}
                     viewBox={props.viewBox}
-                    xOffset={-148}
+                    xOffset={8}
                   />
                 ),
               }}
               stroke="var(--warning)"
               strokeDasharray="3 6"
-              x={update.date}
+              x={labelDate}
             />,
-            update.endDate ? (
+            update.endDate && visibleStart !== labelDate ? (
               <ReferenceLine
                 {...axisProps}
                 ifOverflow="visible"
-                key={`${keyPrefix}-fixed-update-end-${update.endDate}`}
+                key={`${keyPrefix}-fixed-update-start-${update.date}`}
                 stroke="var(--warning)"
                 strokeDasharray="3 6"
-                x={update.endDate}
+                x={visibleStart}
               />
             ) : null,
           ]
@@ -3387,7 +3416,7 @@ function ChartTooltip({
   }
 
   const dateLabel = String(label)
-  const { events, contests, governmentOrders } = contextItemsForDate(context, dateLabel)
+  const { events, contests, governmentOrders, fixedUpdates } = contextItemsForDate(context, dateLabel)
   const eventsByRealm = ([0, 1] as RealmId[])
     .map((realmId) => ({
       realmId,
@@ -3462,6 +3491,17 @@ function ChartTooltip({
                 </small>
               ))}
             </div>
+          ))}
+        </div>
+      )}
+      {fixedUpdates.length > 0 && (
+        <div className="tooltip-context">
+          <b>Game updates</b>
+          {fixedUpdates.map((update) => (
+            <small key={`${update.date}-${update.label}`}>
+              {update.label}
+              {update.endDate ? ` (${formatDisplayDate(update.date)} - ${formatDisplayDate(update.endDate)})` : ''}
+            </small>
           ))}
         </div>
       )}
@@ -6216,7 +6256,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.3.1</strong>
+              <strong>v1.3.2</strong>
             </div>
           </div>
 

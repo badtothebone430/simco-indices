@@ -6,7 +6,9 @@
     "collect": "node collect-market.mjs",
     "backfill:30d": "node backfill-30d.mjs",
     "backfill:components": "node backfill-index-components.mjs",
-    "backfill:orders": "node backfill-government-orders.mjs"
+    "backfill:orders": "node backfill-government-orders.mjs",
+    "recalc:index-values": "node recalculate-index-values-lagged.mjs apply",
+    "restore:index-values": "node recalculate-index-values-lagged.mjs restore"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2"
