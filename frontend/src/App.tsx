@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import {
   Activity,
   ArrowDownRight,
@@ -14,6 +15,7 @@ import {
   FlaskConical,
   Globe2,
   Hammer,
+  MessageSquare,
   Layers,
   Link2,
   LineChart as LineChartIcon,
@@ -536,6 +538,7 @@ const changelogEntries: ChangelogEntry[] = [
       'Added lagged-weight index recalculation tooling so index returns use the previous day basket weights.',
       'Filtered index charts to the retained 90-day window to avoid stale filler rows.',
       'Improved fixed game update labels and tooltip context on charts.',
+      'Added a feedback form for reporting bugs, issues, data problems, and ideas.',
     ],
   },
   {
@@ -3953,6 +3956,8 @@ function App() {
   const [tourStepIndex, setTourStepIndex] = useState(0)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
   const [dataRefreshToken, setDataRefreshToken] = useState(0)
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false)
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false)
   const visibleTourSteps = useMemo(
     () =>
       tourSteps.filter((step) => {
@@ -4866,6 +4871,36 @@ function App() {
     setDataRefreshToken((current) => current + 1)
   }
 
+  function closeFeedbackModal() {
+    setShowFeedbackModal(false)
+    setFeedbackSubmitted(false)
+  }
+
+  function submitFeedback(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    const encoded = new URLSearchParams()
+    formData.forEach((value, key) => {
+      encoded.append(key, String(value))
+    })
+
+    fetch('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: encoded.toString(),
+    })
+      .then(() => {
+        setFeedbackSubmitted(true)
+        form.reset()
+      })
+      .catch(() => {
+        const category = String(formData.get('category') ?? 'Feedback')
+        const description = String(formData.get('description') ?? '')
+        window.location.href = `mailto:support@lokiclarke.com?subject=${encodeURIComponent(`SimCompanies site ${category}`)}&body=${encodeURIComponent(description)}`
+      })
+  }
+
   function compositionSortHeader(label: string, sort: CompositionTableSort) {
     const active = compositionTableSort === sort
     return (
@@ -4961,6 +4996,16 @@ function App() {
             type="button"
           >
             <CircleHelp size={18} />
+          </button>
+          <button
+            aria-label="Report a bug or idea"
+            className="feedback-button"
+            onClick={() => setShowFeedbackModal(true)}
+            title="Report a bug or idea"
+            type="button"
+          >
+            <MessageSquare size={16} />
+            Report
           </button>
           <button
             aria-label={`Use ${experienceMode === 'advanced' ? 'beginner' : 'advanced'} mode`}
@@ -6256,7 +6301,7 @@ function App() {
             </div>
             <div className="version-badge" aria-label="Current version">
               <span>Version</span>
-              <strong>v1.3.2</strong>
+              <strong>v1.3.3</strong>
             </div>
           </div>
 
@@ -6305,6 +6350,92 @@ function App() {
           stepIndex={tourStepIndex}
           steps={visibleTourSteps}
         />
+      )}
+      {showFeedbackModal && (
+        <div className="feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title">
+          <button className="feedback-backdrop" onClick={closeFeedbackModal} type="button" aria-label="Close feedback form" />
+          <form
+            className="feedback-card"
+            data-netlify="true"
+            data-netlify-honeypot="bot-field"
+            method="POST"
+            name="site-feedback"
+            onSubmit={submitFeedback}
+          >
+            <input type="hidden" name="form-name" value="site-feedback" />
+            <p className="hidden-field">
+              <label>
+                Do not fill this out
+                <input name="bot-field" />
+              </label>
+            </p>
+            <div className="feedback-header">
+              <div>
+                <p className="eyebrow">Feedback</p>
+                <h2 id="feedback-title">Report a bug, issue, or idea</h2>
+              </div>
+              <button className="icon-button" onClick={closeFeedbackModal} type="button" aria-label="Close feedback form">
+                <X size={18} />
+              </button>
+            </div>
+
+            {feedbackSubmitted ? (
+              <div className="feedback-success">
+                <strong>Sent.</strong>
+                <p>Thanks, the report has been submitted.</p>
+                <button className="command-button" onClick={closeFeedbackModal} type="button">
+                  Close
+                </button>
+              </div>
+            ) : (
+              <>
+                <label>
+                  SimCompanies username
+                  <input name="username" placeholder="Your company or username" />
+                </label>
+                <label>
+                  Category
+                  <select name="category" required defaultValue="bug">
+                    <option value="bug">Bug</option>
+                    <option value="issue">Issue</option>
+                    <option value="idea">Idea</option>
+                    <option value="data">Data problem</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label>
+                  Page or feature
+                  <input name="feature" placeholder="Dashboard, Screener, Comparisons..." />
+                </label>
+                <label>
+                  Contact email
+                  <input name="email" type="email" placeholder="Optional, if you want a reply" />
+                </label>
+                <label className="feedback-wide">
+                  Description
+                  <textarea
+                    name="description"
+                    required
+                    rows={6}
+                    placeholder="What happened, what did you expect, or what should be added?"
+                  />
+                </label>
+                <input name="url" type="hidden" value={window.location.href} />
+                <div className="feedback-actions">
+                  <a href="mailto:support@lokiclarke.com">support@lokiclarke.com</a>
+                  <div>
+                    <button className="ghost-button" onClick={closeFeedbackModal} type="button">
+                      Cancel
+                    </button>
+                    <button className="command-button" type="submit">
+                      Send report
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </form>
+        </div>
       )}
     </main>
   )

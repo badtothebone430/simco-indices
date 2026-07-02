@@ -11,6 +11,16 @@
     <title>Simco Indices</title>
   </head>
   <body>
+    <form name="site-feedback" netlify netlify-honeypot="bot-field" hidden>
+      <input type="hidden" name="form-name" value="site-feedback" />
+      <input name="bot-field" />
+      <input name="username" />
+      <select name="category"></select>
+      <input name="feature" />
+      <input name="email" />
+      <textarea name="description"></textarea>
+      <input name="url" />
+    </form>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
